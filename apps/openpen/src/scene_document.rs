@@ -121,6 +121,9 @@ pub struct SceneDocument {
     saved_step: u64,
     /// Last `pipe.update` / flush duration (diagnostics).
     pub last_update: Duration,
+    /// Agent whose streamed `execute` has uncommitted changes in the scene
+    /// (see `agent::stream`): user edits, undo and redo are refused meanwhile.
+    stream_lock: Option<String>,
 }
 
 /// A document is loaded on the background executor and moved to the UI thread.
@@ -589,6 +592,7 @@ impl SceneDocument {
             next_step: 0,
             saved_step: 0,
             last_update: Duration::ZERO,
+            stream_lock: None,
         };
         d.rebuild_mirror();
         d
@@ -669,8 +673,12 @@ impl SceneDocument {
         }
     }
 
-    /// Applies an op inside the current block (or as its own step).
+    /// Applies an op inside the current block (or as its own step). Refused
+    /// while an agent stream holds the document.
     pub fn apply_op(&mut self, op: DocOp) -> bool {
+        if self.stream_lock.is_some() {
+            return false;
+        }
         let open = self.undo.in_block();
         if !open {
             self.begin();
@@ -704,6 +712,9 @@ impl SceneDocument {
     }
 
     pub fn undo(&mut self) -> bool {
+        if self.stream_lock.is_some() {
+            return false;
+        }
         match self.undo.undo(&mut self.scene) {
             Ok(true) => {
                 if let Some(id) = self.step_ids.pop() {
@@ -721,6 +732,9 @@ impl SceneDocument {
     }
 
     pub fn redo(&mut self) -> bool {
+        if self.stream_lock.is_some() {
+            return false;
+        }
         match self.undo.redo(&mut self.scene) {
             Ok(true) => {
                 if let Some(id) = self.redo_ids.pop() {
@@ -742,18 +756,83 @@ impl SceneDocument {
         self.undo.in_block()
     }
 
+    /// The agent whose stream holds the document, if any.
+    pub fn stream_lock(&self) -> Option<&str> {
+        self.stream_lock.as_deref()
+    }
+
+    /// Feeds the prefix of a snippet that is still arriving to the engine
+    /// (`ScriptEngine::execute_partial`): its complete statements are applied
+    /// live but stay uncommitted, and the document is locked for `agent`
+    /// until [`Self::run_script`] (finalize) or [`Self::stream_cancel`].
+    /// Refused (error status) while a user gesture or another agent's stream
+    /// is open.
+    pub fn stream_partial(
+        &mut self,
+        engine: &mut pen_script::ScriptEngine,
+        agent: &str,
+        prefix: &str,
+    ) -> pen_script::PartialStatus {
+        if self.stream_lock.as_deref().is_some_and(|a| a != agent) || self.undo.in_block() {
+            return pen_script::PartialStatus {
+                error: Some("the document is busy".into()),
+                ..Default::default()
+            };
+        }
+        self.flush();
+        let status = engine.execute_partial(&mut self.scene, &mut self.pipe, agent, prefix);
+        self.stream_lock = engine.has_stream(agent).then(|| agent.to_string());
+        self.pending = true;
+        self.flush();
+        status
+    }
+
+    /// Reverts and drops `agent`'s stream; unlocks the document.
+    pub fn stream_cancel(&mut self, engine: &mut pen_script::ScriptEngine, agent: &str) -> bool {
+        let had = engine.cancel_stream(&mut self.scene, &mut self.pipe, agent);
+        if self.stream_lock.as_deref() == Some(agent) {
+            self.stream_lock = None;
+        }
+        self.pending = true;
+        self.flush();
+        had
+    }
+
     /// Runs an agent script (MCP `execute`) as one undo step, then updates
     /// layout and the display list. On failure the document is unchanged.
+    /// When `req.agent_id` has a stream open on this document, the call
+    /// finalizes it (the streamed changes and the rest of the snippet become
+    /// one step); another agent's stream makes the call fail as busy.
     pub fn run_script(
         &mut self,
         engine: &mut pen_script::ScriptEngine,
         host: &mut dyn pen_script::ScriptHost,
         req: pen_script::ExecuteRequest,
     ) -> pen_script::ExecuteResponse {
+        if let Some(other) = self.stream_lock.as_deref()
+            && other != req.agent_id
+        {
+            let text = "The document is busy: another agent is still writing to it. Retry when it finishes.".to_string();
+            return pen_script::ExecuteResponse {
+                ok: false,
+                error: Some(pen_script::ScriptError {
+                    message: text.clone(),
+                    line: None,
+                    column: None,
+                    call: None,
+                }),
+                text,
+                ..Default::default()
+            };
+        }
         // The engine reads layout: bring it up to date with pending edits.
         self.flush();
         let before = self.undo.undo_len();
+        let agent = req.agent_id.clone();
         let resp = engine.execute(&mut self.scene, &mut self.pipe, &mut self.undo, host, req);
+        if self.stream_lock.as_deref() == Some(agent.as_str()) {
+            self.stream_lock = None;
+        }
         if resp.ok && (resp.ops > 0 || self.undo.undo_len() > before) {
             self.next_step += 1;
             self.step_ids.push(self.next_step);

@@ -1,10 +1,23 @@
 //! The [`ToolBackend`] of the GUI: MCP calls arrive on the server's Tokio
 //! threads, are sent over an unbounded channel to a task on the GPUI
 //! foreground (see `hub`), and the answer comes back through a oneshot.
+//!
+//! The same channel carries the streaming `execute` updates
+//! ([`GuiBackend::stream_partial`], [`GuiBackend::stream_cancel`], see
+//! `agent::stream`), which any thread (the embedded chat) can send.
 
 use futures::FutureExt as _;
 use futures::channel::{mpsc, oneshot};
-use pen_mcp::{BoxFuture, CallCtx, ExecuteArgs, ToolBackend, ToolError, ToolResult};
+use gpui_kit::EntityId;
+use pen_mcp::{BoxFuture, CallCtx, ExecuteArgs, ToolBackend, ToolError, ToolOutput, ToolResult};
+
+/// Environment variable that enables the hidden MCP tool
+/// [`DEBUG_STREAM_TOOL`] (`1`), to drive streaming from outside the app.
+pub const DEBUG_STREAM_ENV: &str = "OPENPEN_DEBUG_STREAM";
+
+/// Hidden debug tool: `{toolUseId, input, uri?, agentId?, cancel?}` feeds (or
+/// cancels) a stream as the embedded chat would. Not listed in `tools/list`.
+pub const DEBUG_STREAM_TOOL: &str = "debug_stream_partial";
 
 /// A request for the foreground.
 #[derive(Debug)]
@@ -26,6 +39,20 @@ pub enum AgentRequest {
     },
     Connected(CallCtx),
     Disconnected(CallCtx),
+    /// The growing source of an `execute` call (see `agent::stream`).
+    StreamPartial {
+        agent_id: String,
+        tool_use_id: String,
+        uri: Option<String>,
+        prefix: String,
+    },
+    /// Roll back a stream (by tool use id, else the agent's).
+    StreamCancel {
+        agent_id: String,
+        tool_use_id: Option<String>,
+    },
+    /// A document tab is closing: its streams are cancelled.
+    DocClosed(EntityId),
 }
 
 pub type RequestRx = mpsc::UnboundedReceiver<AgentRequest>;
@@ -34,6 +61,7 @@ pub type RequestRx = mpsc::UnboundedReceiver<AgentRequest>;
 #[derive(Debug, Clone)]
 pub struct GuiBackend {
     tx: mpsc::UnboundedSender<AgentRequest>,
+    debug_stream: bool,
 }
 
 const GONE: &str = "OpenPen is shutting down";
@@ -41,7 +69,58 @@ const GONE: &str = "OpenPen is shutting down";
 impl GuiBackend {
     pub fn new() -> (Self, RequestRx) {
         let (tx, rx) = mpsc::unbounded();
-        (Self { tx }, rx)
+        (
+            Self {
+                tx,
+                debug_stream: false,
+            },
+            rx,
+        )
+    }
+
+    /// Enables the hidden [`DEBUG_STREAM_TOOL`].
+    pub fn with_debug_stream(mut self, on: bool) -> Self {
+        self.debug_stream = on;
+        self
+    }
+
+    /// Reports the longest decoded prefix of the JS source of a streaming
+    /// `execute` call (`tool_use_id`) of `agent_id` (the `client_id` its
+    /// final call will carry, unless matched by tool use id). `doc_uri` picks
+    /// the document like the tool's `uri` (`None`: the focused one). Cheap
+    /// and non-blocking, callable from any thread: the foreground coalesces
+    /// the updates. False if the app is gone.
+    pub fn stream_partial(
+        &self,
+        agent_id: impl Into<String>,
+        tool_use_id: impl Into<String>,
+        doc_uri: Option<String>,
+        input_prefix: String,
+    ) -> bool {
+        self.tx
+            .unbounded_send(AgentRequest::StreamPartial {
+                agent_id: agent_id.into(),
+                tool_use_id: tool_use_id.into(),
+                uri: doc_uri,
+                prefix: input_prefix,
+            })
+            .is_ok()
+    }
+
+    /// Rolls back a stream (e.g. the user stopped the chat, or the tool call
+    /// was abandoned). By tool use id, else the agent's stream.
+    pub fn stream_cancel(&self, agent_id: impl Into<String>, tool_use_id: Option<String>) -> bool {
+        self.tx
+            .unbounded_send(AgentRequest::StreamCancel {
+                agent_id: agent_id.into(),
+                tool_use_id,
+            })
+            .is_ok()
+    }
+
+    /// A document tab is closing.
+    pub fn doc_closed(&self, id: EntityId) {
+        let _ = self.tx.unbounded_send(AgentRequest::DocClosed(id));
     }
 
     fn call(
@@ -78,6 +157,39 @@ impl ToolBackend for GuiBackend {
         let _ = self.tx.unbounded_send(AgentRequest::Connected(ctx.clone()));
     }
 
+    fn call_extension(
+        &self,
+        ctx: CallCtx,
+        name: &str,
+        args: serde_json::Map<String, serde_json::Value>,
+    ) -> Option<BoxFuture<'static, ToolResult>> {
+        if !self.debug_stream || name != DEBUG_STREAM_TOOL {
+            return None;
+        }
+        let str_arg = |k: &str| args.get(k).and_then(|v| v.as_str()).map(str::to_string);
+        let agent = str_arg("agentId").unwrap_or(ctx.client_id);
+        let Some(tool) = str_arg("toolUseId") else {
+            return Some(
+                std::future::ready(Err(ToolError::InvalidParams(
+                    "`toolUseId` is required".into(),
+                )))
+                .boxed(),
+            );
+        };
+        let sent = if args.get("cancel").and_then(|v| v.as_bool()) == Some(true) {
+            self.stream_cancel(agent, Some(tool))
+        } else {
+            let input = str_arg("input").unwrap_or_default();
+            self.stream_partial(agent, tool, str_arg("uri"), input)
+        };
+        let r = if sent {
+            Ok(ToolOutput::text("queued"))
+        } else {
+            Err(ToolError::Unavailable(GONE.into()))
+        };
+        Some(std::future::ready(r).boxed())
+    }
+
     fn agent_disconnected(&self, ctx: &CallCtx) {
         let _ = self
             .tx
@@ -94,6 +206,7 @@ mod tests {
         CallCtx {
             client_id: "client-1".into(),
             agent_name: "claude".into(),
+            ..Default::default()
         }
     }
 
@@ -115,6 +228,54 @@ mod tests {
             futures::executor::block_on(rx.next()),
             Some(AgentRequest::Connected(_))
         ));
+    }
+
+    #[test]
+    fn stream_updates_and_debug_tool_go_through_the_channel() {
+        let (backend, mut rx) = GuiBackend::new();
+        assert!(backend.stream_partial("chat-1", "toolu_1", None, "a = 1\n".into()));
+        match futures::executor::block_on(rx.next()) {
+            Some(AgentRequest::StreamPartial {
+                agent_id,
+                tool_use_id,
+                uri,
+                prefix,
+            }) => {
+                assert_eq!(
+                    (agent_id.as_str(), tool_use_id.as_str()),
+                    ("chat-1", "toolu_1")
+                );
+                assert_eq!((uri, prefix.as_str()), (None, "a = 1\n"));
+            }
+            other => panic!("{other:?}"),
+        }
+        // The debug tool is off unless enabled.
+        let args = serde_json::json!({"toolUseId": "t9", "input": "x"});
+        let args = args.as_object().unwrap().clone();
+        assert!(
+            backend
+                .call_extension(ctx(), DEBUG_STREAM_TOOL, args.clone())
+                .is_none()
+        );
+        let backend = backend.with_debug_stream(true);
+        let fut = backend
+            .call_extension(ctx(), DEBUG_STREAM_TOOL, args)
+            .unwrap();
+        assert_eq!(futures::executor::block_on(fut).unwrap().text, "queued");
+        assert!(matches!(
+            futures::executor::block_on(rx.next()),
+            Some(AgentRequest::StreamPartial { agent_id, .. }) if agent_id == "client-1"
+        ));
+        assert!(backend.stream_cancel("chat-1", None));
+        assert!(matches!(
+            futures::executor::block_on(rx.next()),
+            Some(AgentRequest::StreamCancel {
+                tool_use_id: None,
+                ..
+            })
+        ));
+        drop(rx);
+        assert!(!backend.stream_partial("chat-1", "t", None, String::new()));
     }
 
     #[test]

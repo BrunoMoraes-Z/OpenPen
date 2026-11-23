@@ -22,8 +22,15 @@ let resp = eng.execute(&mut scene, &mut pipe, &mut undo, &mut pen_script::Headle
   `HeadlessHost` usa só os padrões; o app GPUI pode sobrescrever.
 - Streaming: `execute_partial(scene, pipe, agent, prefixo)` avalia as instruções completas de um
   snippet que ainda está chegando; o `execute` final do mesmo agente com o texto completo continua
-  no mesmo contexto e faz o commit (um passo de undo). `cancel_stream` reverte. Entre as chamadas o
+  no mesmo contexto e faz o commit (um passo de undo). `cancel_stream` reverte; `discard_stream`
+  descarta sem reverter (documento fechado); `has_stream` consulta. Entre as chamadas o
   documento fica com as mudanças aplicadas e sem commit: o chamador não deve editar nesse meio-tempo.
+  `PartialStatus` traz `evaluated`, `error`, `touched` (só os nós novos desde o parcial anterior,
+  para o flash ao vivo) e `ops`. Se o `execute` final que continua um stream falhar, ele é
+  refeito **uma vez do zero** (já revertido): um corte em fronteira falsa não derruba um snippet
+  válido, e um erro real sai igual ao de uma chamada direta. Coordenação no app:
+  `docs/streaming-execute.md`.
+- `set_id_seed(Some(n))`: ids gerados determinísticos (testes que comparam duas execuções).
 - `complete_prefix(src)`: o divisor de instruções (tokenizer: strings, templates com `${}`,
   comentários, regex, profundidade de colchetes, cabeçalhos `if/for/while`, continuação por
   `else/catch/finally`, `.metodo()` e operadores). Fronteiras de quebra de linha ou `}` só são

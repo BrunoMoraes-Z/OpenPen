@@ -9,6 +9,7 @@ pub mod fx;
 pub mod hub;
 pub mod paint;
 pub mod route;
+pub mod stream;
 pub mod ui;
 
 use std::collections::HashMap;

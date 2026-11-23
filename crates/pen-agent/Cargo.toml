@@ -1,0 +1,37 @@
+[package]
+name = "pen-agent"
+description = "Núcleo do chat embutido do OpenPen: sessão com um agente via Claude Code CLI ou API Messages da Anthropic, com fluxo de eventos normalizado"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pen-mcp.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+futures = "0.3"
+base64 = "0.22"
+bytes = "1"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "io-util", "macros", "sync", "time", "process"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2", "stream"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+which = "8"
+keyring = { version = "3.6", features = ["windows-native", "apple-native", "linux-native"] }
+getrandom = "0.3"
+
+[dev-dependencies]
+wiremock = "0.6"
+pretty_assertions.workspace = true
+
+[lib]
+# rustdoc is not available in this toolchain
+doctest = false
+
+# Test helper: replays a recorded Claude Code stream-json transcript. Used by
+# `tests/cli_engine.rs` through `CARGO_BIN_EXE_pen-agent-fake-claude`.
+[[bin]]
+name = "pen-agent-fake-claude"
+path = "src/bin/fake_claude.rs"
+test = false
+doc = false

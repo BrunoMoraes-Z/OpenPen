@@ -371,3 +371,40 @@ async fn skills_missing_is_reported() {
     assert!(text(&r).contains("OPENPEN_SKILLS_DIR"));
     client.cancel().await.unwrap();
 }
+
+#[tokio::test]
+async fn tool_use_id_from_request_meta_reaches_ctx() {
+    use rmcp::model::{MetaObject, RequestMetaObject};
+    let (client, backend, server) = start(McpOptions::default()).await;
+
+    let mut meta = JsonObject::new();
+    meta.insert(
+        pen_mcp::TOOL_USE_ID_META.into(),
+        Value::String("toolu_01ABC".into()),
+    );
+    let mut params = CallToolRequestParams::new("execute")
+        .with_arguments(args(json!({"description": "Add hero", "input": "x = 1"})));
+    params.meta = Some(RequestMetaObject(MetaObject(meta)));
+    let r = client.call_tool(params).await.unwrap();
+    assert_eq!(text(&r), "ran: Add hero");
+    // Without `_meta` there is no id (and the session ctx does not keep it).
+    call(
+        &client,
+        "execute",
+        json!({"description": "Again", "input": "x = 2"}),
+    )
+    .await
+    .unwrap();
+
+    client.cancel().await.unwrap();
+    server.await.unwrap();
+    let ids: Vec<Option<String>> = backend
+        .events()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::Execute(ctx, _) => Some(ctx.tool_use_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ids, vec![Some("toolu_01ABC".to_string()), None]);
+}

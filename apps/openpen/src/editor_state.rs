@@ -525,17 +525,63 @@ impl EditorState {
     /// and refreshes the panels like any other edit. Touched nodes flash and
     /// the agent's cursor visits them; `view` is the visible world rect
     /// (where a new cursor appears).
+    ///
+    /// `skip_touched`: leading `resp.touched` entries already flashed while
+    /// the script streamed (finalizing a stream, see `agent::stream`).
     pub fn run_agent_script(
         &mut self,
         engine: &mut pen_script::ScriptEngine,
         agent: &AgentInfo,
         req: pen_script::ExecuteRequest,
         view: pen_render::Rect,
+        skip_touched: usize,
         cx: &mut Context<Self>,
     ) -> pen_script::ExecuteResponse {
         let resp = self.doc.run_script(engine, &mut AppScriptHost, req);
         self.changed(cx);
-        let nodes = touched_nodes(&self.doc, &resp.touched);
+        let touched = resp.touched.get(skip_touched..).unwrap_or_default();
+        self.flash_agent(agent, touched, view);
+        cx.notify();
+        resp
+    }
+
+    /// Feeds a streamed `execute` prefix (`SceneDocument::stream_partial`):
+    /// the new complete statements show up live, uncommitted, with the
+    /// panels refreshed and the touched nodes flashing.
+    pub fn run_agent_partial(
+        &mut self,
+        engine: &mut pen_script::ScriptEngine,
+        agent: &AgentInfo,
+        prefix: &str,
+        view: pen_render::Rect,
+        cx: &mut Context<Self>,
+    ) -> pen_script::PartialStatus {
+        let status = self.doc.stream_partial(engine, &agent.client_id, prefix);
+        self.changed(cx);
+        self.flash_agent(agent, &status.touched, view);
+        cx.notify();
+        status
+    }
+
+    /// Reverts an agent's open stream on this document.
+    pub fn cancel_agent_stream(
+        &mut self,
+        engine: &mut pen_script::ScriptEngine,
+        agent: &str,
+        cx: &mut Context<Self>,
+    ) {
+        self.doc.stream_cancel(engine, agent);
+        self.changed(cx);
+        cx.notify();
+    }
+
+    fn flash_agent(
+        &mut self,
+        agent: &AgentInfo,
+        touched: &[pen_script::Touch],
+        view: pen_render::Rect,
+    ) {
+        let nodes = touched_nodes(&self.doc, touched);
         let spawn = pen_render::Vec2::new(view.x + view.w * 0.5, view.y + view.h * 0.5);
         self.agent_fx.touch(
             &agent.client_id,
@@ -545,8 +591,6 @@ impl EditorState {
             spawn,
             std::time::Instant::now(),
         );
-        cx.notify();
-        resp
     }
 
     // ------------------------------------------------------- clipboard

@@ -162,6 +162,11 @@ impl Tx {
         }
     }
 
+    /// Makes generated ids deterministic (tests comparing two runs).
+    pub fn seed_ids(&mut self, seed: u64) {
+        self.ids = IdGenerator::with_seed(seed);
+    }
+
     /// Brings layout and display list up to date with the edits so far.
     pub fn layout(&mut self) {
         if self.stale {

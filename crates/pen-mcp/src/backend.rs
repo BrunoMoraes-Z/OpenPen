@@ -11,13 +11,21 @@ use futures::future::BoxFuture;
 use crate::tools::ExecuteArgs;
 
 /// Who is calling: one MCP session (one socket connection or one stdio server).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CallCtx {
     /// Unique per connection for the lifetime of the server (`client-1`, `stdio`, ...).
     pub client_id: String,
     /// Display name of the agent: `--agent` of the shim, else the MCP `clientInfo.name`.
     pub agent_name: String,
+    /// Id of the model's tool call, from the request `_meta`
+    /// ([`TOOL_USE_ID_META`], sent by Claude Code). Only set on `tools/call`;
+    /// lets the app match a final `execute` with the stream of the same call.
+    pub tool_use_id: Option<String>,
 }
+
+/// `_meta` key with which Claude Code tags each MCP tool call with the id of
+/// the model's `tool_use` block.
+pub const TOOL_USE_ID_META: &str = "claudecode/toolUseId";
 
 /// What a tool returns to the agent.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -90,6 +98,18 @@ pub trait ToolBackend: Send + Sync + 'static {
 
     /// Writes the document to disk.
     fn save(&self, ctx: CallCtx, uri: Option<String>) -> BoxFuture<'static, ToolResult>;
+
+    /// A tool this crate does not know (not listed in `tools/list`), e.g. an
+    /// app's debug hook. `None` (the default) answers "unknown tool".
+    fn call_extension(
+        &self,
+        ctx: CallCtx,
+        name: &str,
+        args: serde_json::Map<String, serde_json::Value>,
+    ) -> Option<BoxFuture<'static, ToolResult>> {
+        let _ = (ctx, name, args);
+        None
+    }
 
     /// A session made its first request (the agent name is known by then).
     fn agent_connected(&self, ctx: &CallCtx) {

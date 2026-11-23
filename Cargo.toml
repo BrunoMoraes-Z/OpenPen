@@ -13,6 +13,7 @@ members = [
     "crates/pen-script",
     "crates/pen-shader",
     "crates/pen-mcp",
+    "crates/pen-agent",
     "apps/openpen",
     "apps/openpen-cli",
 ]
@@ -36,6 +37,7 @@ pen-codegen = { path = "crates/pen-codegen" }
 pen-script = { path = "crates/pen-script" }
 pen-shader = { path = "crates/pen-shader" }
 pen-mcp = { path = "crates/pen-mcp" }
+pen-agent = { path = "crates/pen-agent" }
 
 anyhow = "1"
 thiserror = "2"

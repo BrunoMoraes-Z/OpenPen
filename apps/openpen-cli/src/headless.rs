@@ -316,6 +316,7 @@ mod tests {
         CallCtx {
             client_id: "stdio".into(),
             agent_name: "tester".into(),
+            ..Default::default()
         }
     }
 

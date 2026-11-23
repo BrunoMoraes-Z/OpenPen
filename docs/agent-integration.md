@@ -160,9 +160,9 @@ testadas sem janela. A cola com a GPUI é coberta pelo teste ponta a ponta.
 
 ## Lacunas
 
-- Sem streaming (`execute_partial`): a edição aparece de uma vez no fim da chamada, e o cursor
-  visita os nós depois. O motor já suporta streaming; falta o `pen-mcp` repassar o snippet
-  parcial.
+- Streaming do `execute` (edição aparecendo enquanto o agente escreve): coordenado em
+  `agent/stream.rs`, ver `docs/streaming-execute.md`. Agentes MCP externos sem o chat embutido
+  ainda recebem a edição de uma vez (o MCP não carrega o JSON parcial da chamada).
 - O `execute` roda síncrono na thread da UI (limite de 55 s do motor). Um script pesado
   congela a janela enquanto roda.
 - Sem placeholders/"generating", sem animação de mudança de layout dos pais e sem perfis de

@@ -26,7 +26,9 @@ use rmcp::transport::IntoTransport;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::sync::CancellationToken;
 
-pub use backend::{CallCtx, ToolBackend, ToolError, ToolOutput, ToolResult, uri_to_path};
+pub use backend::{
+    CallCtx, TOOL_USE_ID_META, ToolBackend, ToolError, ToolOutput, ToolResult, uri_to_path,
+};
 pub use futures::future::BoxFuture;
 pub use server::INSTRUCTIONS;
 pub use skills::{SkillStore, find_skills_dir};

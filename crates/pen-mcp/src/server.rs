@@ -13,7 +13,7 @@ use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 use serde::de::DeserializeOwned;
 
 use crate::McpOptions;
-use crate::backend::{CallCtx, ToolBackend, ToolError, ToolOutput, ToolResult};
+use crate::backend::{CallCtx, TOOL_USE_ID_META, ToolBackend, ToolError, ToolOutput, ToolResult};
 use crate::skills::SkillStore;
 use crate::tools::{self, ExecuteArgs, GetAppStateArgs, ReadSkillArgs, SaveArgs, StartTaskArgs};
 
@@ -89,6 +89,7 @@ impl Session {
             let ctx = CallCtx {
                 client_id: self.client_id.clone(),
                 agent_name,
+                tool_use_id: None,
             };
             *slot = Some(ctx.clone());
             ctx
@@ -152,12 +153,15 @@ impl OpenPenServer {
                 })
             }
             tools::GET_STYLE => Ok(ToolOutput::text(STYLE_UNAVAILABLE)),
-            other => {
-                return Err(McpError::invalid_params(
-                    format!("unknown tool `{other}`"),
-                    None,
-                ));
-            }
+            other => match backend.call_extension(ctx, other, args) {
+                Some(f) => f.await,
+                None => {
+                    return Err(McpError::invalid_params(
+                        format!("unknown tool `{other}`"),
+                        None,
+                    ));
+                }
+            },
         })
     }
 
@@ -170,6 +174,19 @@ impl OpenPenServer {
             )
         })
     }
+}
+
+/// The Claude Code tool use id of a `tools/call`: rmcp moves the params'
+/// `_meta` into the request context; the params' copy is checked as well.
+fn tool_use_id(
+    context: &serde_json::Map<String, serde_json::Value>,
+    params: Option<&rmcp::model::MetaObject>,
+) -> Option<String> {
+    std::iter::once(context)
+        .chain(params.map(|m| &m.0))
+        .find_map(|m| m.get(TOOL_USE_ID_META)?.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 fn parse<T: DeserializeOwned>(
@@ -244,9 +261,10 @@ impl ServerHandler for OpenPenServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
-        let ctx = self
+        let mut ctx = self
             .session
             .ctx(&self.shared, context.client_info().as_ref());
+        ctx.tool_use_id = tool_use_id(&context.meta.0.0, request.meta.as_ref().map(|m| &m.0));
         let args = request.arguments.unwrap_or_default();
         let result = self.dispatch(ctx, &request.name, args).await?;
         to_call_result(result).map(Into::into)

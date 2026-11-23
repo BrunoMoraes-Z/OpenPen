@@ -293,7 +293,8 @@ impl Workspace {
         if ix >= self.tabs.len() {
             return;
         }
-        self.tabs.remove(ix);
+        let tab = self.tabs.remove(ix);
+        crate::agent::hub::doc_closing(tab.state.entity_id(), cx);
         let next = match self.active {
             Some(a) if a == ix => (!self.tabs.is_empty()).then(|| ix.min(self.tabs.len() - 1)),
             Some(a) if a > ix => Some(a - 1),
@@ -306,6 +307,8 @@ impl Workspace {
     fn close(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(tab) = self.tabs.get(ix) else { return };
         let state = tab.state.clone();
+        // Closing a tab rolls back an agent stream on it (before asking to save).
+        crate::agent::hub::doc_closing(state.entity_id(), cx);
         if !state.read(cx).is_dirty() {
             self.remove_tab(ix, window, cx);
             return;
@@ -381,6 +384,32 @@ impl Workspace {
     ) {
         let s = state.read(cx);
         if s.loading {
+            return;
+        }
+        if s.doc.stream_lock().is_some() {
+            // An agent's streamed `execute` is half applied: never write that.
+            // Save once it is committed (or rolled back / timed out).
+            window.push_notification(
+                "An AI agent is writing to this document; it will be saved when it finishes.",
+                cx,
+            );
+            let state = state.clone();
+            cx.spawn_in(window, async move |this, cx| {
+                loop {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(100))
+                        .await;
+                    if !state.read_with(cx, |s, _| s.doc.stream_lock().is_some()) {
+                        break;
+                    }
+                }
+                let _ = this.update_in(cx, |this, window, cx| {
+                    if this.tab_of(&state).is_some() {
+                        this.save(&state, save_as, close_after, window, cx);
+                    }
+                });
+            })
+            .detach();
             return;
         }
         let Some(path) = s.path.clone().filter(|_| !save_as) else {

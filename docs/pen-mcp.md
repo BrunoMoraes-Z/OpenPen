@@ -37,7 +37,7 @@ Pontos-chave:
 ### O trait `ToolBackend`
 
 ```rust
-pub struct CallCtx { pub client_id: String, pub agent_name: String }
+pub struct CallCtx { pub client_id: String, pub agent_name: String, pub tool_use_id: Option<String> }
 pub struct ToolOutput { pub text: String, pub images: Vec<Vec<u8>> /* PNG */, pub is_error: bool }
 
 pub trait ToolBackend: Send + Sync + 'static {
@@ -46,6 +46,7 @@ pub trait ToolBackend: Send + Sync + 'static {
     fn save(&self, ctx: CallCtx, uri: Option<String>) -> BoxFuture<'static, ToolResult>;
     fn agent_connected(&self, ctx: &CallCtx) {}
     fn agent_disconnected(&self, ctx: &CallCtx) {}
+    fn call_extension(&self, ctx: CallCtx, name: &str, args: Map) -> Option<BoxFuture<..>> { None }
 }
 ```
 
@@ -54,6 +55,13 @@ pub trait ToolBackend: Send + Sync + 'static {
 - `CallCtx.client_id` é único por conexão (`client-1`, `client-2`, …; `stdio` no modo stdio).
   `agent_name` vem, nesta ordem: da saudação do shim (`--agent`), de `McpOptions::agent_name`, do
   `clientInfo.name` do MCP, ou `"agent"`.
+- `CallCtx.tool_use_id` vem do `_meta` do `tools/call` (chave `claudecode/toolUseId`, a
+  constante `TOOL_USE_ID_META`, que o Claude Code envia; o rmcp move o `_meta` dos params para o
+  `RequestContext`, e o servidor olha os dois). Só é preenchido por chamada (o `CallCtx` da sessão
+  não guarda). O app usa para casar o `execute` final com o streaming da mesma chamada
+  (`docs/streaming-execute.md`).
+- `call_extension`: ferramentas que o crate não conhece (não aparecem em `tools/list`) vão para o
+  backend antes do erro "unknown tool". O app usa para o hook de depuração do streaming.
 - `agent_connected` é chamado uma vez por sessão, na primeira requisição (normalmente o
   `initialize`, quando o nome já é conhecido); `agent_disconnected` quando a sessão termina
   (só se o `connected` tiver sido emitido). Servem para a lista de agentes conectados na UI.

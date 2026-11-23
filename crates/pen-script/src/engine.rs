@@ -114,6 +114,11 @@ pub struct PartialStatus {
     pub evaluated: usize,
     /// First error (evaluation stops; the final call reports it).
     pub error: Option<String>,
+    /// Nodes touched since the previous partial call of this stream (for the
+    /// live flash); the final response still lists every touched node.
+    pub touched: Vec<Touch>,
+    /// Document operations applied so far by the stream (uncommitted).
+    pub ops: usize,
 }
 
 // ---------------------------------------------------------------------- budget
@@ -201,6 +206,8 @@ struct Run {
     source: String,
     done: usize,
     error: Option<ScriptError>,
+    /// `tx.out.touched` entries already reported by `execute_partial`.
+    reported: usize,
 }
 
 fn eval_options() -> EvalOptions {
@@ -256,6 +263,7 @@ impl Run {
         scene: SceneDoc,
         pipe: Pipeline,
         globals: Option<&IndexMap<String, String>>,
+        id_seed: Option<u64>,
     ) -> Result<Run, String> {
         let rt = Runtime::new().map_err(|e| format!("cannot start QuickJS: {e}"))?;
         rt.set_memory_limit(limits.memory_bytes);
@@ -264,7 +272,11 @@ impl Run {
         let b = budget.clone();
         rt.set_interrupt_handler(Some(Box::new(move || b.interrupt())));
         let ctx = Context::full(&rt).map_err(|e| format!("cannot create JS context: {e}"))?;
-        let tx = Arc::new(Mutex::new(Tx::new(scene, pipe)));
+        let mut tx = Tx::new(scene, pipe);
+        if let Some(seed) = id_seed {
+            tx.seed_ids(seed);
+        }
+        let tx = Arc::new(Mutex::new(tx));
         let globals_json = globals.map(|g| serde_json::to_string(g).unwrap_or_default());
         let setup = ctx.with(|ctx| -> Result<(), String> {
             let tx = tx.clone();
@@ -316,6 +328,7 @@ impl Run {
             source: String::new(),
             done: 0,
             error: None,
+            reported: 0,
         })
     }
 
@@ -431,6 +444,7 @@ pub struct ScriptEngine {
     streams: HashMap<String, Run>,
     parking: Option<(SceneDoc, Pipeline)>,
     ids: IdGenerator,
+    id_seed: Option<u64>,
 }
 
 impl Default for ScriptEngine {
@@ -497,6 +511,7 @@ impl ScriptEngine {
             streams: HashMap::new(),
             parking: None,
             ids: IdGenerator::new(),
+            id_seed: None,
         }
     }
 
@@ -504,6 +519,30 @@ impl ScriptEngine {
         ScriptEngine {
             limits,
             ..Self::new()
+        }
+    }
+
+    /// Seeds the node id generator of every run (`None`: random). Two runs of
+    /// the same snippet on the same document then create the same ids, which
+    /// lets tests compare a streamed and a direct `execute` byte for byte.
+    pub fn set_id_seed(&mut self, seed: Option<u64>) {
+        self.id_seed = seed;
+    }
+
+    /// True while `agent_id` has an open (uncommitted) stream.
+    pub fn has_stream(&self, agent_id: &str) -> bool {
+        self.streams.contains_key(agent_id)
+    }
+
+    /// Drops an agent's open stream **without** reverting it: for when its
+    /// document is gone (closed tab). Use [`Self::cancel_stream`] otherwise.
+    pub fn discard_stream(&mut self, agent_id: &str) -> bool {
+        match self.streams.remove(agent_id) {
+            Some(r) => {
+                self.park(r);
+                true
+            }
+            None => false,
         }
     }
 
@@ -548,7 +587,7 @@ impl ScriptEngine {
 
     fn new_run(&mut self, agent: &str) -> Result<Run, String> {
         let (s, p) = self.placeholders();
-        Run::new(&self.limits, s, p, self.globals.get(agent))
+        Run::new(&self.limits, s, p, self.globals.get(agent), self.id_seed)
     }
 
     /// Evaluates the complete top-level statements of a snippet that is still
@@ -572,8 +611,8 @@ impl ScriptEngine {
                     Ok(r) => r,
                     Err(e) => {
                         return PartialStatus {
-                            evaluated: 0,
                             error: Some(e),
+                            ..Default::default()
                         };
                     }
                 }
@@ -582,8 +621,8 @@ impl ScriptEngine {
                 Ok(r) => r,
                 Err(e) => {
                     return PartialStatus {
-                        evaluated: 0,
                         error: Some(e),
+                        ..Default::default()
                     };
                 }
             },
@@ -600,13 +639,21 @@ impl ScriptEngine {
             self.rollback_run(&run, scene, pipe);
             self.park(run);
             return PartialStatus {
-                evaluated: 0,
                 error: Some("internal error while streaming".into()),
+                ..Default::default()
             };
         }
+        let (touched, ops) = {
+            let g = lock(&run.tx);
+            let from = run.reported.min(g.out.touched.len());
+            (g.out.touched[from..].to_vec(), g.out.ops)
+        };
+        run.reported += touched.len();
         let status = PartialStatus {
             evaluated: run.done,
             error: run.error.as_ref().map(|e| e.message.clone()),
+            touched,
+            ops,
         };
         self.streams.insert(agent_id.to_string(), run);
         status
@@ -688,36 +735,54 @@ impl ScriptEngine {
             },
         };
         // 2. Context: continue a stream of this agent or start fresh.
-        let run = match self.streams.remove(&req.agent_id) {
-            Some(r) if edit_id.is_none() && source.starts_with(&r.source[..r.done]) => Ok(r),
+        let (run, mut continued) = match self.streams.remove(&req.agent_id) {
+            Some(r) if edit_id.is_none() && source.starts_with(&r.source[..r.done]) => {
+                (Ok(r), true)
+            }
             Some(r) => {
                 self.rollback_run(&r, scene, pipe);
                 self.park(r);
-                self.new_run(&req.agent_id)
+                (self.new_run(&req.agent_id), false)
             }
-            None => self.new_run(&req.agent_id),
+            None => (self.new_run(&req.agent_id), false),
         };
         let mut run = match run {
             Ok(r) => r,
             Err(e) => return fail(e, None),
         };
-        run.source = source;
-        // 3. Evaluate, render, commit or roll back.
-        run.swap(scene, pipe);
-        let outcome = catch_unwind(AssertUnwindSafe(|| self.finish(&mut run, host)));
-        let outcome = match outcome {
-            Ok(o) => o,
-            Err(_) => {
-                let _ = catch_unwind(AssertUnwindSafe(|| lock(&run.tx).rollback()));
-                Err(ScriptError {
-                    message: "internal error (the call was rolled back)".into(),
-                    line: None,
-                    column: None,
-                    call: None,
-                })
+        // 3. Evaluate, render, commit or roll back. A streamed run that fails
+        // (already rolled back) is retried once from scratch: a chunk split at
+        // a false statement boundary must not fail a snippet that is valid as
+        // a whole, and a real error is then reported exactly like a direct
+        // call.
+        let outcome = loop {
+            run.source = source.clone();
+            run.swap(scene, pipe);
+            let outcome = catch_unwind(AssertUnwindSafe(|| self.finish(&mut run, host)));
+            let outcome = match outcome {
+                Ok(o) => o,
+                Err(_) => {
+                    let _ = catch_unwind(AssertUnwindSafe(|| lock(&run.tx).rollback()));
+                    Err(ScriptError {
+                        message: "internal error (the call was rolled back)".into(),
+                        line: None,
+                        column: None,
+                        call: None,
+                    })
+                }
+            };
+            run.swap(scene, pipe);
+            if outcome.is_err() && continued {
+                continued = false;
+                self.park(run);
+                run = match self.new_run(&req.agent_id) {
+                    Ok(r) => r,
+                    Err(e) => return fail(e, None),
+                };
+                continue;
             }
+            break outcome;
         };
-        run.swap(scene, pipe);
 
         let mut resp = ExecuteResponse::default();
         match outcome {
