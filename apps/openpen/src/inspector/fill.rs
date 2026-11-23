@@ -230,6 +230,13 @@ pub enum PaintOp {
     Opacity(f32),
     ImageUrl(String),
     ImageFit(ImageFit),
+    /// Binds the solid color (or gradient stop `stop`) to the color variable
+    /// `var` (`$var` in the file). `None` detaches: the resolved color is
+    /// written as a literal, as Pen's variable picker does with "None".
+    BindColor {
+        stop: Option<usize>,
+        var: Option<String>,
+    },
 }
 
 /// The paint open in the fill popover. The canvas draws gradient handles
@@ -543,6 +550,35 @@ pub fn apply(f: &mut ps::Fill, op: &PaintOp, resolve: &mut Resolve) -> bool {
             ps::Fill::Gradient(g) => apply_gradient(g, op, resolve),
             _ => false,
         },
+        PaintOp::BindColor { stop, var } => {
+            let slot: &mut Option<ps::ColorOrVar> = match (f, stop) {
+                (ps::Fill::Gradient(g), Some(i)) => {
+                    match g.colors.as_mut().and_then(|l| l.get_mut(*i)) {
+                        Some(s) => &mut s.color,
+                        None => return false,
+                    }
+                }
+                (ps::Fill::Color(cf), None) => &mut cf.color,
+                (ps::Fill::Solid(c), None) => {
+                    let next = bind_color(Some(&*c), var.as_deref(), resolve);
+                    return match next {
+                        Some(n) if n != *c => {
+                            *c = n;
+                            true
+                        }
+                        _ => false,
+                    };
+                }
+                _ => return false,
+            };
+            match bind_color(slot.as_ref(), var.as_deref(), resolve) {
+                Some(n) if slot.as_ref() != Some(&n) => {
+                    *slot = Some(n);
+                    true
+                }
+                _ => false,
+            }
+        }
         PaintOp::ImageUrl(_) | PaintOp::ImageFit(_) => match f {
             ps::Fill::Image(i) => {
                 match op {
@@ -554,6 +590,23 @@ pub fn apply(f: &mut ps::Fill, op: &PaintOp, resolve: &mut Resolve) -> bool {
             }
             _ => false,
         },
+    }
+}
+
+/// The color written when binding `cur` to `var` (`None` = detach to the
+/// resolved literal; `None` result = nothing to change).
+fn bind_color(
+    cur: Option<&ps::ColorOrVar>,
+    var: Option<&str>,
+    resolve: &mut Resolve,
+) -> Option<ps::ColorOrVar> {
+    match var {
+        Some(v) => Some(ps::ColorOrVar(format!("${v}"))),
+        None => {
+            let c = cur?;
+            c.var()?;
+            Some(ps::ColorOrVar(hex(resolved(c, resolve))))
+        }
     }
 }
 
@@ -628,7 +681,19 @@ pub enum GradHandle {
 pub struct HandlePoints {
     pub start: [f32; 2],
     pub end: [f32; 2],
+    /// Radial / angular: the end of the ellipse's other axis (Pen's
+    /// `ellipsePoint`). Its knob sits on the opposite side, see
+    /// [`HandlePoints::width_knob`].
     pub width: Option<[f32; 2]>,
+}
+
+impl HandlePoints {
+    /// Where the second-radius knob is drawn: Pen puts it at
+    /// `center - (ellipsePoint - center)`.
+    pub fn width_knob(&self) -> Option<[f32; 2]> {
+        let e = self.width?;
+        Some([2.0 * self.start[0] - e[0], 2.0 * self.start[1] - e[1]])
+    }
 }
 
 /// Unit direction of a gradient rotation (0 = up, counter-clockwise).
@@ -742,10 +807,20 @@ pub fn drag_handle(
             };
             let to_n = |q: [f32; 2], c: [f32; 2]| [(q[0] - c[0]) / sx, (q[1] - c[1]) / sy];
             match which {
-                // The center moves the whole gradient. (Pen keeps the radius
-                // handle in place, which turns the ellipse; the renderer has
-                // no rotated radial gradients, so the preview would lie.)
-                GradHandle::Start => ([p[0] / w, p[1] / h], g.size, g.rotation),
+                // As in Pen: the radius handle stays where it is, so moving
+                // the center turns the ellipse and stretches it; the other
+                // radius keeps its ratio to this one.
+                GradHandle::Start => {
+                    let v = to_n(hp.end, p);
+                    let l = (len(v) * 2.0).max(MIN);
+                    let rotation = if len(v) < 1e-6 {
+                        g.rotation
+                    } else {
+                        rotation_of(v)
+                    };
+                    let ratio = if g.size[1] == 0.0 { 1.0 } else { l / g.size[1] };
+                    ([p[0] / w, p[1] / h], [g.size[0] * ratio, l], rotation)
+                }
                 GradHandle::End => {
                     let v = to_n(p, hp.start);
                     let rotation = if len(v) < 1e-6 {
@@ -756,10 +831,13 @@ pub fn drag_handle(
                     (g.center, [g.size[0], (len(v) * 2.0).max(MIN)], rotation)
                 }
                 GradHandle::Width => {
+                    // Projected on the axis; the knob is on the negative
+                    // side, so dragging it across the center flips the
+                    // sign (Pen keeps negative widths).
                     let v = to_n(p, hp.start);
                     let pd = perp(dir(g.rotation));
-                    let proj = (v[0] * pd[0] + v[1] * pd[1]).abs();
-                    (g.center, [(proj * 2.0).max(MIN), g.size[1]], g.rotation)
+                    let proj = v[0] * pd[0] + v[1] * pd[1];
+                    (g.center, [-proj * 2.0, g.size[1]], g.rotation)
                 }
             }
         }
@@ -953,6 +1031,42 @@ mod tests {
     }
 
     #[test]
+    fn bind_and_detach_color_variables() {
+        let bind = |var: Option<&str>, stop: Option<usize>| PaintOp::BindColor {
+            stop,
+            var: var.map(str::to_string),
+        };
+        // Solid: bound, then detached to the resolved literal.
+        let mut f = fill(r##""#ff0000""##);
+        assert!(apply(&mut f, &bind(Some("brand"), None), &mut vars));
+        assert_eq!(to_json(&f), serde_json::json!("$brand"));
+        assert!(apply(&mut f, &bind(None, None), &mut vars));
+        assert_eq!(to_json(&f), serde_json::json!("#3366FF"));
+        // Detaching a literal changes nothing.
+        assert!(!apply(&mut f, &bind(None, None), &mut vars));
+        // A color object keeps its other fields.
+        let mut f = fill(r##"{"type":"color","color":"#000000","blendMode":"multiply","k":1}"##);
+        assert!(apply(&mut f, &bind(Some("brand"), None), &mut vars));
+        let j = to_json(&f);
+        assert_eq!(j["color"], "$brand");
+        assert_eq!(
+            (j["blendMode"].as_str(), j["k"].as_i64()),
+            (Some("multiply"), Some(1))
+        );
+        // Gradient stop.
+        let mut g = fill(
+            r##"{"type":"gradient","gradientType":"linear","colors":[{"color":"#000000","position":0},{"color":"$brand","position":1}]}"##,
+        );
+        assert!(apply(&mut g, &bind(Some("brand"), Some(0)), &mut vars));
+        assert!(apply(&mut g, &bind(None, Some(1)), &mut vars));
+        let j = to_json(&g);
+        assert_eq!(j["colors"][0]["color"], "$brand");
+        assert_eq!(j["colors"][1]["color"], "#3366FF");
+        assert!(!apply(&mut g, &bind(Some("x"), Some(5)), &mut vars));
+        assert!(!apply(&mut g, &bind(Some("x"), None), &mut vars));
+    }
+
+    #[test]
     fn gradient_kind_switch_keeps_geometry_and_unknowns() {
         let f = fill(
             r##"{"type":"gradient","gradientType":"linear","enabled":true,"rotation":135,"future":7,
@@ -1126,13 +1240,35 @@ mod tests {
         assert!(close(hp.start, [100.0, 50.0]));
         assert!(close(hp.end, [100.0, 0.0]));
         assert!(close(hp.width.unwrap(), [200.0, 50.0]));
-        let (c, s, r) = drag_handle(&g, GradHandle::Width, [150.0, 50.0], 200.0, 100.0);
+        // Pen draws the second-radius knob on the other side.
+        assert!(close(hp.width_knob().unwrap(), [0.0, 50.0]));
+        let (c, s, r) = drag_handle(&g, GradHandle::Width, [50.0, 50.0], 200.0, 100.0);
         assert!(close(c, [0.5, 0.5]) && (s[0] - 0.5).abs() < 1e-4 && r == 0.0);
+        // Across the center: negative width, as Pen stores it.
+        let (_, s, _) = drag_handle(&g, GradHandle::Width, [150.0, 50.0], 200.0, 100.0);
+        assert!((s[0] + 0.5).abs() < 1e-4, "{s:?}");
         let (_, s, _) = drag_handle(&g, GradHandle::End, [100.0, 25.0], 200.0, 100.0);
         assert!((s[1] - 0.5).abs() < 1e-4);
-        // Moving the center moves the whole gradient.
-        let (c, s, r) = drag_handle(&g, GradHandle::Start, [100.0, 75.0], 200.0, 100.0);
-        assert!(close(c, [0.5, 0.75]) && s == g.size && r == g.rotation);
+        // Moving the center keeps the radius handle in place: the ellipse
+        // turns and stretches (Pen's `center` drag).
+        let (c, s, r) = drag_handle(&g, GradHandle::Start, [200.0, 0.0], 200.0, 100.0);
+        assert!(close(c, [1.0, 0.0]), "{c:?}");
+        // From (1, 0) to the radius end (0.5, 0) in normalized space: left.
+        assert!((r - 90.0).abs() < 1e-3, "{r}");
+        assert!(
+            (s[1] - 1.0).abs() < 1e-4 && (s[0] - 1.0).abs() < 1e-4,
+            "{s:?}"
+        );
+        let g2 = info(GradKind::Radial, c, s, r);
+        let hp2 = handle_points(&g2, 200.0, 100.0);
+        assert!(close(hp2.end, hp.end), "{hp2:?}");
+        // Twice as far from the radius end: the radius doubles, the width
+        // follows.
+        let (_, s, _) = drag_handle(&g, GradHandle::Start, [100.0, 100.0], 200.0, 100.0);
+        assert!(
+            (s[1] - 2.0).abs() < 1e-4 && (s[0] - 2.0).abs() < 1e-4,
+            "{s:?}"
+        );
         // Angular: stops go around clockwise from the radius handle.
         let a = info(GradKind::Angular, [0.5, 0.5], [1.0, 1.0], 0.0);
         let p0 = stop_point(&a, 0.0, 100.0, 100.0);

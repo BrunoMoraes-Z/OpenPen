@@ -4764,19 +4764,24 @@ name = "openpen"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "cosmic-text",
  "futures",
  "glam",
  "gpui-kit",
+ "image",
  "pen-canvas",
  "pen-doc",
  "pen-layout",
  "pen-mcp",
+ "pen-raster",
  "pen-render",
  "pen-schema",
  "pen-script",
  "pen-shader",
+ "serde",
  "serde_json",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

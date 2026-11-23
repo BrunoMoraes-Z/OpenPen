@@ -136,6 +136,8 @@ pub struct CanvasHost {
     alt: bool,
     /// Vector edit mode / pen tool session.
     vector: Option<vector::Session>,
+    /// Tool at the last sync (picking the pen with a shape selected edits it).
+    prev_tool: Tool,
     /// Drag of a gradient handle / stop (see `gradient.rs`).
     grad: Option<gradient::GradDrag>,
     _subs: Vec<Subscription>,
@@ -190,6 +192,7 @@ impl CanvasHost {
             dark: false,
             alt: false,
             vector: None,
+            prev_tool: Tool::Move,
             grad: None,
             _subs: subs,
         };
@@ -1592,6 +1595,16 @@ impl Render for CanvasHost {
             }))
             .on_action(cx.listener(|t, _: &actions::SelectAll, _, cx| {
                 if !t.vector_select_all(cx) {
+                    cx.propagate();
+                }
+            }))
+            .on_action(cx.listener(|t, _: &actions::PathCutTool, _, cx| {
+                if !t.vector_cut_tool(cx) {
+                    cx.propagate();
+                }
+            }))
+            .on_action(cx.listener(|t, _: &actions::JoinPoints, _, cx| {
+                if !t.vector_join(cx) {
                     cx.propagate();
                 }
             }))

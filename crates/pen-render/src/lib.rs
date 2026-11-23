@@ -155,9 +155,13 @@ pub enum Paint {
         end: Vec2,
         stops: SmallVec<[GradientStop; 4]>,
     },
+    /// Elliptical gradient: the unit circle mapped by `center + x * axis_x + y * axis_y`.
+    /// `axis_x` / `axis_y` go from the center to the `t = 1` ellipse; they need not be
+    /// axis-aligned nor perpendicular (rotation and non-uniform scale both fit).
     Radial {
         center: Vec2,
-        radius: Vec2,
+        axis_x: Vec2,
+        axis_y: Vec2,
         stops: SmallVec<[GradientStop; 4]>,
     },
     /// Conic sweep starting at `start_angle` radians (0 = +x, clockwise).
@@ -172,6 +176,26 @@ pub enum Paint {
         opacity: f32,
         scale: f32,
     },
+}
+
+impl Paint {
+    /// An axis-aligned elliptical gradient with radii `radius.x` / `radius.y`.
+    pub fn radial(center: Vec2, radius: Vec2, stops: SmallVec<[GradientStop; 4]>) -> Self {
+        Paint::Radial {
+            center,
+            axis_x: Vec2::new(radius.x, 0.0),
+            axis_y: Vec2::new(0.0, radius.y),
+            stops,
+        }
+    }
+}
+
+/// Maps a local point to the unit space of a radial gradient (`|result|` = gradient `t`).
+/// `None` when the axes are degenerate (collapsed ellipse).
+pub fn radial_to_unit(center: Vec2, axis_x: Vec2, axis_y: Vec2) -> Option<Affine2> {
+    let m = Affine2::from_cols(axis_x, axis_y, center);
+    let det = axis_x.perp_dot(axis_y);
+    (det.is_finite() && det.abs() > 1e-9).then(|| m.inverse())
 }
 
 impl PartialEq for ImageData {

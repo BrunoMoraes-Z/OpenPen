@@ -552,6 +552,29 @@ impl VectorPath {
         out
     }
 
+    /// Drawing elements of the drawable contours (for the renderer).
+    pub fn to_path(&self) -> pen_render::Path {
+        let mut els = Vec::new();
+        for c in self.contours.iter().filter(|c| c.is_drawable()) {
+            els.push(PathEl::MoveTo(c.anchors[0].p));
+            for i in 0..c.segment_count() {
+                let s = c.segment(i).unwrap();
+                els.push(if s.curve {
+                    PathEl::CubicTo(s.c1, s.c2, s.p3)
+                } else {
+                    PathEl::LineTo(s.p3)
+                });
+            }
+            if c.closed {
+                els.push(PathEl::Close);
+            }
+        }
+        pen_render::Path {
+            els,
+            fill_rule: Default::default(),
+        }
+    }
+
     pub fn anchor(&self, r: AnchorRef) -> Option<&Anchor> {
         self.contours.get(r.0)?.anchors.get(r.1)
     }
@@ -769,6 +792,176 @@ impl VectorPath {
         changed
     }
 
+    /// Pen's cut (`X` tool) at anchor `r`: a closed contour opens there (the
+    /// anchor is doubled, one copy at each end); an open contour splits in
+    /// two. False at the end of an open contour.
+    pub fn cut_at(&mut self, r: AnchorRef) -> bool {
+        let Some(c) = self.contours.get(r.0) else {
+            return false;
+        };
+        let n = c.anchors.len();
+        if r.1 >= n || (!c.closed && (r.1 == 0 || r.1 + 1 >= n)) {
+            return false;
+        }
+        let a = c.anchors[r.1];
+        let head = Anchor {
+            handle_in: None,
+            ..a
+        };
+        let tail = Anchor {
+            handle_out: None,
+            ..a
+        };
+        if c.closed {
+            let mut v = vec![head];
+            v.extend_from_slice(&c.anchors[r.1 + 1..]);
+            v.extend_from_slice(&c.anchors[..r.1]);
+            v.push(tail);
+            self.contours[r.0] = Contour::new(v, false);
+        } else {
+            let mut first = c.anchors[..r.1].to_vec();
+            first.push(tail);
+            let mut second = vec![head];
+            second.extend_from_slice(&c.anchors[r.1 + 1..]);
+            self.contours.splice(
+                r.0..=r.0,
+                [Contour::new(first, false), Contour::new(second, false)],
+            );
+        }
+        true
+    }
+
+    /// Pen's "join" (Ctrl+J) of the selected anchors, pairwise in order:
+    /// the two ends of one open contour close it; ends of different contours
+    /// merge them with a straight segment; an anchor inside a contour starts
+    /// a new contour from its position. Pairs already joined by a segment are
+    /// skipped. Returns where the selected anchors went, or `None` when
+    /// nothing changed.
+    pub fn join_anchors(&mut self, sel: &[AnchorRef]) -> Option<Vec<AnchorRef>> {
+        // Work on anchors with stable ids (indices move while joining).
+        let mut next = 0usize;
+        let mut cs: Vec<(Vec<(usize, Anchor)>, bool)> = self
+            .contours
+            .iter()
+            .map(|c| {
+                let v = c
+                    .anchors
+                    .iter()
+                    .map(|a| {
+                        next += 1;
+                        (next - 1, *a)
+                    })
+                    .collect();
+                (v, c.closed)
+            })
+            .collect();
+        let id_of = |r: AnchorRef, cs: &[(Vec<(usize, Anchor)>, bool)]| {
+            cs.get(r.0).and_then(|c| c.0.get(r.1)).map(|a| a.0)
+        };
+        let mut s: Vec<AnchorRef> = sel.to_vec();
+        s.sort_unstable();
+        s.dedup();
+        let s: Vec<usize> = s.iter().filter_map(|&r| id_of(r, &cs)).collect();
+        if s.len() < 2 {
+            return None;
+        }
+        // (contour, end): end = Out for the last anchor of an open contour
+        // (checked first, as Pen), In for the first.
+        let endpoint = |cs: &[(Vec<(usize, Anchor)>, bool)], id: usize| {
+            cs.iter().enumerate().find_map(|(ci, (v, closed))| {
+                if *closed || v.is_empty() {
+                    None
+                } else if v[v.len() - 1].0 == id {
+                    Some((ci, Side::Out))
+                } else if v[0].0 == id {
+                    Some((ci, Side::In))
+                } else {
+                    None
+                }
+            })
+        };
+        let joined = |cs: &[(Vec<(usize, Anchor)>, bool)], a: usize, b: usize| {
+            cs.iter().any(|(v, closed)| {
+                let n = v.len();
+                let segs = if *closed { n } else { n.saturating_sub(1) };
+                (0..segs).any(|i| {
+                    let (x, y) = (v[i].0, v[(i + 1) % n].0);
+                    (x == a && y == b) || (x == b && y == a)
+                })
+            })
+        };
+        let find = |cs: &[(Vec<(usize, Anchor)>, bool)], id: usize| {
+            cs.iter()
+                .enumerate()
+                .find_map(|(ci, (v, _))| v.iter().position(|a| a.0 == id).map(|ai| (ci, ai)))
+        };
+        let mut used = std::collections::HashSet::new();
+        let mut changed = false;
+        for l in 0..s.len() {
+            for c in l + 1..s.len() {
+                let (u, d) = (s[l], s[c]);
+                if used.contains(&u) || used.contains(&d) || joined(&cs, u, d) {
+                    continue;
+                }
+                let mut h = endpoint(&cs, u);
+                let mut f = endpoint(&cs, d);
+                for (id, e) in [(u, h), (d, f)] {
+                    if let Some((_, side)) = e
+                        && let Some((ci, ai)) = find(&cs, id)
+                    {
+                        cs[ci].0[ai].1.set_handle(side, None);
+                    }
+                }
+                match (h, f) {
+                    (Some((hc, _)), Some((fc, _))) if hc == fc => cs[hc].1 = true,
+                    _ => {
+                        if h.is_none() {
+                            let (ci, ai) = find(&cs, u).unwrap();
+                            let p = cs[ci].0[ai].1.p;
+                            cs.push((vec![(next, Anchor::corner(p))], false));
+                            next += 1;
+                            h = Some((cs.len() - 1, Side::Out));
+                        }
+                        if f.is_none() {
+                            let (ci, ai) = find(&cs, d).unwrap();
+                            let p = cs[ci].0[ai].1.p;
+                            cs.push((vec![(next, Anchor::corner(p))], false));
+                            next += 1;
+                            f = Some((cs.len() - 1, Side::In));
+                        }
+                        let ((hc, he), (fc, fe)) = (h.unwrap(), f.unwrap());
+                        // Pen's `v1e`: `u` last in its contour, `d` first.
+                        if he == Side::In {
+                            reverse(&mut cs[hc].0);
+                        }
+                        if fe == Side::Out {
+                            reverse(&mut cs[fc].0);
+                        }
+                        let tail = std::mem::take(&mut cs[fc].0);
+                        cs[hc].0.extend(tail);
+                        cs.remove(fc);
+                    }
+                }
+                used.insert(u);
+                used.insert(d);
+                changed = true;
+            }
+        }
+        if !changed {
+            return None;
+        }
+        let old = std::mem::take(&mut self.contours);
+        self.contours = cs
+            .iter()
+            .map(|(v, closed)| {
+                let c = Contour::new(v.iter().map(|a| a.1).collect(), *closed);
+                // Untouched contours keep their original text.
+                old.iter().find(|o| **o == c).cloned().unwrap_or(c)
+            })
+            .collect();
+        Some(s.iter().filter_map(|&id| find(&cs, id)).collect())
+    }
+
     /// Moves anchors (with their handles) by `d`.
     pub fn translate_anchors(&mut self, refs: &[AnchorRef], d: Vec2) {
         for &r in refs {
@@ -785,6 +978,14 @@ impl VectorPath {
                 a.transform(m);
             }
         }
+    }
+}
+
+/// Reverses a contour's direction (anchors and their in/out handles).
+fn reverse(v: &mut [(usize, Anchor)]) {
+    v.reverse();
+    for (_, a) in v.iter_mut() {
+        std::mem::swap(&mut a.handle_in, &mut a.handle_out);
     }
 }
 
@@ -1082,6 +1283,57 @@ mod tests {
             }
         }
         eprintln!("{seen} corpus paths round-tripped");
+    }
+
+    #[test]
+    fn cut_opens_or_splits_like_pen() {
+        // Closed square cut at its second corner: open, starting and ending
+        // there.
+        let mut p = VectorPath::parse("M0 0 L10 0 L10 10 L0 10 Z");
+        assert!(p.cut_at((0, 1)));
+        assert_eq!(p.to_svg(), "M10 0 L10 10 L0 10 L0 0 L10 0");
+        // Open contour: split in two; the ends cannot be cut.
+        let mut p = VectorPath::parse("M0 0 L10 0 L20 0");
+        assert!(!p.cut_at((0, 0)));
+        assert!(!p.cut_at((0, 2)));
+        assert!(p.cut_at((0, 1)));
+        assert_eq!(p.to_svg(), "M0 0 L10 0 M10 0 L20 0");
+        // Handles stay on their side of the cut.
+        let mut p = VectorPath::parse("M0 0 C0 5 5 10 10 10 C15 10 20 5 20 0");
+        assert!(p.cut_at((0, 1)));
+        assert_eq!(p.contours[0].anchors[1].handle_out, None);
+        assert_eq!(p.contours[1].anchors[0].handle_in, None);
+        assert!(p.contours[1].anchors[0].handle_out.is_some());
+    }
+
+    #[test]
+    fn join_like_pen() {
+        // Both ends of one open contour: closes it.
+        let mut p = VectorPath::parse("M0 0 L10 0 L10 10");
+        assert_eq!(
+            p.join_anchors(&[(0, 0), (0, 2)]),
+            Some(vec![(0, 0), (0, 2)])
+        );
+        assert_eq!(p.to_svg(), "M0 0 L10 0 L10 10 L0 0 Z");
+        // Already joined: nothing.
+        let mut q = VectorPath::parse("M0 0 L10 0");
+        assert_eq!(q.join_anchors(&[(0, 0), (0, 1)]), None);
+        // Ends of two contours: one contour, the first reversed when its
+        // start is joined; the untouched contour keeps its text.
+        let mut p = VectorPath::parse("M0 0 L10 0 M20 0 L30 0 M0 50 L1 50");
+        let sel = p.join_anchors(&[(0, 0), (1, 0)]).unwrap();
+        assert_eq!(p.contours.len(), 2);
+        assert_eq!(p.to_svg(), "M10 0 L0 0 L20 0 L30 0 M0 50 L1 50");
+        assert_eq!(sel, vec![(0, 1), (0, 2)]);
+        // Handles at the joined ends are dropped.
+        let mut p = VectorPath::parse("M0 0 C5 0 10 5 10 10 M20 0 L30 0");
+        p.join_anchors(&[(0, 1), (1, 0)]).unwrap();
+        assert_eq!(p.contours.len(), 1);
+        assert_eq!(p.contours[0].anchors[1].handle_out, None);
+        // A middle anchor starts a new contour from its position.
+        let mut p = VectorPath::parse("M0 0 L10 0 L20 0 M40 0 L50 0");
+        p.join_anchors(&[(0, 1), (1, 0)]).unwrap();
+        assert_eq!(p.to_svg(), "M0 0 L10 0 L20 0 M10 0 L40 0 L50 0");
     }
 
     #[test]

@@ -23,7 +23,7 @@ As fontes seguem a mesma política do pen-layout (`pen_fonts::system::LazyFonts`
 ## Recursos suportados
 
 - **Formas**: retângulo com raio por canto (limitado como no CSS), elipse, path (`NonZero`/`EvenOdd`).
-- **Fills** (de baixo para cima): sólido, linear, radial (elíptico via transform), angular/cônico (gerado por pixel numa textura do tamanho da região visível) e imagem com `Cover`/`Contain`/`Stretch`/`Tile` e opacidade. Imagens reduzidas usam mipmaps (box 2x2) e amostragem bilinear.
+- **Fills** (de baixo para cima): sólido, linear, radial (elíptico, girado e cisalhado: o círculo unitário mapeado por `center + x·axis_x + y·axis_y` via transform do shader), angular/cônico (gerado por pixel numa textura do tamanho da região visível) e imagem com `Cover`/`Contain`/`Stretch`/`Tile` e opacidade. Imagens reduzidas usam mipmaps (box 2x2) e amostragem bilinear.
 - **Stroke**: alinhamento `Inside`/`Center`/`Outside`, caps, joins, miter limit, dash, várias paints. Em retângulos, inside/outside e larguras por lado viram um anel exato (outer − inner, even-odd). Nas demais formas, inside/outside usa traço com largura dobrada recortado pela máscara da forma (ou do complemento). Paths abertos sempre usam `Center`.
 - **Sombras**: drop shadow abaixo dos fills e inner shadow acima dos fills (abaixo do stroke), com offset, blur e spread. Spread em retângulo/elipse é geométrico; em paths usa o contorno do traço (dilata ou erode). Blur grande é calculado em resolução reduzida (como o Skia) e ampliado de forma bilinear.
 - **Blur**: aproximação de gaussiana com 3 box blurs por eixo (somas deslizantes). Convenção: `sigma = raio / 2` (a mesma do CSS e do Figma).

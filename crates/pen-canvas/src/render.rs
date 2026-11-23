@@ -2027,10 +2027,10 @@ mod tests {
     }
 
     fn radial(c: Color) -> Paint {
-        Paint::Radial {
-            center: Vec2::splat(0.5),
-            radius: Vec2::splat(0.5),
-            stops: smallvec![
+        Paint::radial(
+            Vec2::splat(0.5),
+            Vec2::splat(0.5),
+            smallvec![
                 GradientStop {
                     offset: 0.0,
                     color: c
@@ -2040,7 +2040,7 @@ mod tests {
                     color: Color::rgba(1.0, 1.0, 1.0, 1.0),
                 },
             ],
-        }
+        )
     }
 
     #[test]

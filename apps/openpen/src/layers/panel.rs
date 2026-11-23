@@ -165,6 +165,14 @@ impl LayersPanel {
     }
 
     fn on_drag_move(&mut self, ev: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        // The button went up before the capture existed (down + up in one
+        // frame): a click, not a drag. Without this the next click anywhere
+        // dropped the layer there.
+        if ev.pressed_button != Some(MouseButton::Left) {
+            self.drag = None;
+            cx.notify();
+            return;
+        }
         let y = f32::from(ev.position.y);
         let Some(d) = &mut self.drag else { return };
         if !d.active {

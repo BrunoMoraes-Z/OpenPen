@@ -19,9 +19,18 @@ pen-mcp.workspace = true
 pen-script.workspace = true
 pen-shader.workspace = true
 futures = "0.3"
+# Home: recents store, thumbnails (pen-raster), dates.
+pen-raster.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+image.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[target.'cfg(windows)'.dependencies]
+# Recycle Bin (SHFileOperationW) and background thread priority for previews.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_System_Threading"] }
 
 [dev-dependencies]
-serde_json.workspace = true
 
 [lib]
 path = "src/lib.rs"

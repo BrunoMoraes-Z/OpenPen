@@ -6,6 +6,7 @@
 //! `apply` = a `DocOp` in an undo block) and the panel stays as is.
 
 use super::fill::{FillType, GradientInfo, ImageInfo, PaintOp};
+use super::script::{ScriptProps, ScriptValue};
 use super::value::SizeValue;
 use crate::layers::model::{LayerId, LayerKind};
 
@@ -405,6 +406,8 @@ pub struct NodeProps {
     pub stroke_align: StrokeAlign,
     pub effects: Vec<Effect>,
     pub text: Option<TextProps>,
+    /// Script nodes: the file and its typed `@input`s.
+    pub script: Option<ScriptProps>,
 }
 
 impl NodeProps {
@@ -439,6 +442,7 @@ impl NodeProps {
             stroke_align: StrokeAlign::Center,
             effects: Vec::new(),
             text: is_text.then(TextProps::default),
+            script: None,
         }
     }
 
@@ -579,6 +583,14 @@ impl NodeProps {
                     t.align = *a;
                 }
             }
+            PropEdit::ScriptInput { name, value } => {
+                if let Some(Ok(inputs)) = self.script.as_mut().map(|s| s.inputs.as_mut())
+                    && let Some(i) = inputs.iter_mut().find(|i| i.name == *name)
+                {
+                    i.value = value.clone();
+                    i.var = None;
+                }
+            }
             PropEdit::Paint { stroke, index, op } => {
                 let list = if *stroke {
                     &mut self.strokes
@@ -682,6 +694,11 @@ pub enum PropEdit {
         stroke: bool,
         index: usize,
         op: PaintOp,
+    },
+    /// Value of a script node's `@input` (replaces a variable binding).
+    ScriptInput {
+        name: String,
+        value: ScriptValue,
     },
 }
 

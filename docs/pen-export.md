@@ -68,7 +68,7 @@ pen_export::pdf::export_pages(&pipe.list, &pages)?;
 | `transform` | `<g transform="translate(..)"/"matrix(..)">` | identidade omitida |
 | `Paint::Solid` | `fill="#rrggbb"` + `fill-opacity` | |
 | `Paint::Linear` | `<linearGradient gradientUnits="userSpaceOnUse">` | início = fim → cor do último stop (como tiny-skia) |
-| `Paint::Radial` | `<radialGradient cx=0 cy=0 r=1 gradientTransform="matrix(rx 0 0 ry cx cy)">` | elíptico exato |
+| `Paint::Radial` | `<radialGradient cx=0 cy=0 r=1 gradientTransform="matrix(ax.x ax.y ay.x ay.y cx cy)">` (os dois eixos do contrato) | elíptico exato, girado/cisalhado |
 | `Paint::Angular` | `<pattern>` com PNG renderizado pelo pen-raster | SVG não tem gradiente cônico |
 | `Paint::Image` (fill, não-tile) | `<image>` em `<defs>` (data URI PNG) + `<use transform>` recortado pela forma | cover/contain/stretch idênticos ao pen-raster; cada imagem é embutida uma vez |
 | `Paint::Image` (tile, stroke, texto) | `<pattern>` com `<use>` da imagem | |

@@ -35,6 +35,9 @@ use crate::layers::panel::node_icon;
 use crate::theme::{Palette, PaletteExt, metrics};
 use crate::ui::drag;
 
+mod script_ui;
+mod variables_ui;
+
 /// Every numeric field of the inspector.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Field {
@@ -210,6 +213,8 @@ enum ColorTarget {
     Stroke(usize),
     /// Shadow color of effect `i`.
     Effect(usize),
+    /// Color `@input` `i` of the selected script node.
+    Script(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -294,6 +299,15 @@ pub struct InspectorPanel {
     stop_drag: Option<StopDrag>,
     /// Focus of the fill popover (Delete removes the selected stop).
     pop_focus: FocusHandle,
+    /// Where keyboard focus goes back when the popover closes (the canvas),
+    /// so editor shortcuts keep working.
+    return_focus: Option<FocusHandle>,
+    /// Inputs of the script section (by `@input` name).
+    script_inputs: HashMap<String, Entity<InputState>>,
+    script_scrub: Option<script_ui::ScriptScrub>,
+    /// Variable list open in the color popover.
+    var_pick: Option<variables_ui::VarPick>,
+    var_search: Entity<InputState>,
     paint_drag: Option<PaintDrag>,
     /// Effect whose parameters are shown.
     fx_open: Option<usize>,
@@ -448,6 +462,7 @@ impl InspectorPanel {
                 }
             },
         ));
+        let var_search = variables_ui::search_input(window, cx, &mut subs);
         let mut this = Self {
             state,
             inputs,
@@ -461,6 +476,11 @@ impl InspectorPanel {
             stop_inputs: HashMap::new(),
             stop_drag: None,
             pop_focus: cx.focus_handle(),
+            return_focus: None,
+            script_inputs: HashMap::new(),
+            script_scrub: None,
+            var_pick: None,
+            var_search,
             paint_drag: None,
             fx_open: None,
             fx_inputs,
@@ -473,6 +493,25 @@ impl InspectorPanel {
         };
         this.sync_inputs(window, cx);
         this
+    }
+
+    /// The focus restored when the color popover closes (the canvas).
+    pub fn set_return_focus(&mut self, focus: FocusHandle) {
+        self.return_focus = Some(focus);
+    }
+
+    /// Closes the color popover. Focus inside it (or nowhere, since the
+    /// focused popover is gone) goes back to the canvas.
+    fn close_color_popover(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.color_edit = None;
+        self.var_pick = None;
+        self.push_fill_edit(cx);
+        if let Some(f) = &self.return_focus
+            && (self.pop_focus.contains_focused(window, cx) || window.focused(cx).is_none())
+        {
+            window.focus(f, cx);
+        }
+        cx.notify();
     }
 
     fn selected_props<'a>(&self, cx: &'a App) -> Vec<&'a NodeProps> {
@@ -506,6 +545,10 @@ impl InspectorPanel {
         if let ColorTarget::Effect(i) = t {
             let p = self.selected_props(cx).first().copied()?;
             return p.effects.get(i).map(|e| e.color);
+        }
+        if let ColorTarget::Script(i) = t {
+            let p = self.selected_props(cx).first().copied()?;
+            return p.script.as_ref()?.input(i).map(|inp| inp.color());
         }
         let paint = self.target_paint(t, cx)?;
         match paint.kind {
@@ -543,6 +586,14 @@ impl InspectorPanel {
                         ..EffectParams::from(e)
                     },
                 )
+            }
+            ColorTarget::Script(i) => {
+                let p = self.selected_props(cx).first().copied()?;
+                let input = p.script.as_ref()?.input(i)?;
+                PropEdit::ScriptInput {
+                    name: input.name.clone(),
+                    value: super::script::ScriptValue::Text(fill::hex(c)),
+                }
             }
         })
     }
@@ -852,7 +903,12 @@ impl InspectorPanel {
         }
     }
 
-    fn on_scrub_move(&mut self, ev: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_scrub_move(&mut self, ev: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // Released before the window capture existed (down + up in one
+        // frame): end here instead of leaving the undo block open.
+        if ev.pressed_button != Some(MouseButton::Left) {
+            return self.end_scrub(window, cx);
+        }
         let Some(sc) = &self.scrub else { return };
         let mods = ScrubMods {
             shift: ev.modifiers.shift,
@@ -891,16 +947,16 @@ impl InspectorPanel {
         cx: &mut Context<Self>,
     ) {
         let exists = match target {
-            ColorTarget::Effect(_) => self.target_color(target, cx).is_some(),
+            ColorTarget::Effect(_) | ColorTarget::Script(_) => {
+                self.target_color(target, cx).is_some()
+            }
             _ => self.target_paint(target, cx).is_some(),
         };
         if !exists {
             return;
         }
         if self.color_edit.as_ref().is_some_and(|e| e.target == target) {
-            self.color_edit = None;
-            self.push_fill_edit(cx);
-            cx.notify();
+            self.close_color_popover(window, cx);
             return;
         }
         // Gradients: the picker starts on the first stop.
@@ -967,7 +1023,12 @@ impl InspectorPanel {
         }
     }
 
-    fn on_pick_move(&mut self, ev: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_pick_move(&mut self, ev: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // Released before the window capture existed (down + up in one
+        // frame): end here instead of leaving the undo block open.
+        if ev.pressed_button != Some(MouseButton::Left) {
+            return self.end_pick(window, cx);
+        }
         self.pick_at(ev.position, cx);
     }
 
@@ -986,7 +1047,7 @@ impl InspectorPanel {
         match t {
             ColorTarget::Fill(i) => Some((false, i)),
             ColorTarget::Stroke(i) => Some((true, i)),
-            ColorTarget::Effect(_) => None,
+            ColorTarget::Effect(_) | ColorTarget::Script(_) => None,
         }
     }
 
@@ -1136,7 +1197,17 @@ impl InspectorPanel {
         self.select_stop(Some(index), window, cx);
     }
 
-    fn on_stop_drag_move(&mut self, ev: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_stop_drag_move(
+        &mut self,
+        ev: &MouseMoveEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Released before the window capture existed (down + up in one
+        // frame): end here instead of leaving the undo block open.
+        if ev.pressed_button != Some(MouseButton::Left) {
+            return self.end_stop_drag(window, cx);
+        }
         let Some(bar) = self.color_edit.as_ref().map(|c| c.bar_bounds.get()) else {
             return;
         };
@@ -1386,7 +1457,8 @@ impl InspectorPanel {
                                     .px_0()
                                     .text_size(px(metrics::TEXT_XXS)),
                             ),
-                    ),
+                    )
+                    .children(self.var_button(cx).map(|b| div().pl(px(3.)).child(b))),
             )
     }
 
@@ -1772,13 +1844,8 @@ impl InspectorPanel {
         let p = cx.pal();
         let paint = self.target_paint(ce.target, cx);
         let ftype = paint.as_ref().and_then(|p| p.fill_type());
-        let close = icon_btn("color-close", 0, IconName::X, false, &p).on_click(cx.listener(
-            |this, _, _, cx| {
-                this.color_edit = None;
-                this.push_fill_edit(cx);
-                cx.notify();
-            },
-        ));
+        let close = icon_btn("color-close", 0, IconName::X, false, &p)
+            .on_click(cx.listener(|this, _, window, cx| this.close_color_popover(window, cx)));
         let header = div()
             .flex()
             .items_center()
@@ -1792,6 +1859,17 @@ impl InspectorPanel {
                 .justify_between()
                 .child(div().font_weight(FontWeight::MEDIUM).child("Shadow color"))
                 .child(close),
+            ColorTarget::Script(i) => {
+                let name = self
+                    .selected_props(cx)
+                    .first()
+                    .and_then(|p| p.script.as_ref()?.input(i).map(|inp| inp.name.clone()))
+                    .unwrap_or_default();
+                header
+                    .justify_between()
+                    .child(div().font_weight(FontWeight::MEDIUM).child(name))
+                    .child(close)
+            }
             _ => {
                 let mut tabs = div().flex_1().flex().gap(px(2.));
                 for (i, (icon, tip, t)) in [
@@ -1826,7 +1904,9 @@ impl InspectorPanel {
             }
         };
         let body = div().p(px(12.)).flex().flex_col().gap(px(10.));
+        let var_list = self.render_var_pick(cx);
         let body = match (&paint, ftype) {
+            _ if var_list.is_some() => body.children(var_list),
             (Some(pt), Some(t)) if t.gradient().is_some() => match &pt.gradient {
                 Some(g) => body.child(self.render_gradient_body(ce, pt, g, window, cx)),
                 None => body,
@@ -1893,13 +1973,11 @@ impl InspectorPanel {
                 {
                     // After the canvas saw the click: grabbing a gradient
                     // handle there keeps the popover open (Pen).
-                    cx.defer_in(window, |this, _, cx| {
+                    cx.defer_in(window, |this, window, cx| {
                         if this.state.read(cx).fill_handle_drag {
                             return;
                         }
-                        this.color_edit = None;
-                        this.push_fill_edit(cx);
-                        cx.notify();
+                        this.close_color_popover(window, cx);
                     });
                 }
             }))
@@ -1917,7 +1995,17 @@ impl InspectorPanel {
         )
     }
 
-    fn on_paint_drag_move(&mut self, ev: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_paint_drag_move(
+        &mut self,
+        ev: &MouseMoveEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Released before the window capture existed (down + up in one
+        // frame): end here instead of leaving the undo block open.
+        if ev.pressed_button != Some(MouseButton::Left) {
+            return self.end_paint_drag(window, cx);
+        }
         let Some(d) = &mut self.paint_drag else {
             return;
         };
@@ -3509,7 +3597,7 @@ fn action_group(
 }
 
 /// Pen select trigger: 24 px, control background, chevron at 70 %.
-fn select_button(id: &'static str, label: &str, p: &Palette) -> Button {
+fn select_button(id: impl Into<ElementId>, label: &str, p: &Palette) -> Button {
     Button::new(id)
         .ghost()
         .xsmall()
@@ -3632,15 +3720,23 @@ impl Render for InspectorPanel {
         // Drop editors whose target disappeared (selection change, removal).
         if let Some(t) = self.color_edit.as_ref().map(|c| c.target) {
             let gone = match t {
-                ColorTarget::Effect(_) => self.target_color(t, cx).is_none(),
+                ColorTarget::Effect(_) | ColorTarget::Script(_) => {
+                    self.target_color(t, cx).is_none()
+                }
                 _ => self.target_paint(t, cx).is_none(),
             };
             if gone {
                 self.color_edit = None;
                 self.stop_drag = None;
+                if let Some(f) = &self.return_focus
+                    && self.pop_focus.contains_focused(window, cx)
+                {
+                    window.focus(f, cx);
+                }
             }
         }
         self.ensure_stop_inputs(window, cx);
+        self.ensure_script_inputs(window, cx);
         self.push_fill_edit(cx);
         if let Some(i) = self.fx_open
             && self
@@ -3666,6 +3762,9 @@ impl Render for InspectorPanel {
                 .child(self.render_position(window, cx))
                 .child(self.render_layout(props, parent_flex, window, cx))
                 .child(self.render_appearance(props, window, cx));
+            if let Some(sp) = &props.script {
+                body = body.child(self.render_script(sp, window, cx));
+            }
             body = body
                 .child(self.render_paints("Fill", props, false, window, cx))
                 .child(self.render_paints("Stroke", props, true, window, cx));
@@ -3700,6 +3799,14 @@ impl Render for InspectorPanel {
                     CursorStyle::ResizeLeftRight,
                     Self::on_scrub_move,
                     Self::end_scrub,
+                ))
+            })
+            .when(self.script_scrub.is_some(), |d| {
+                d.child(drag::capture(
+                    entity.clone(),
+                    CursorStyle::ResizeLeftRight,
+                    Self::on_script_scrub_move,
+                    Self::end_script_scrub,
                 ))
             })
             .when(self.paint_drag.is_some(), |d| {

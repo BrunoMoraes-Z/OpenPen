@@ -52,7 +52,7 @@ Achados que definem o desenho:
 | Alinhamento inside/outside em paths arbitrários | aproximado | tratado como center |
 | Larguras por lado em shapes tesselados | aproximado | usa a maior largura |
 | Gradiente linear de 2 paradas (quad e path) | **nativo** | conversão exata start/end → ângulo + percentuais do shader (testada contra uma reimplementação do shader); transformações não conformes usam `A^-T d` |
-| Gradiente linear N paradas, radial, angular em rect/círculo | **exato via textura** | textura CPU (≤ 256²) gerada uma vez por (chunk, versão, item, fill, alfa) e desenhada com `paint_image` + raios |
+| Gradiente linear N paradas, radial (com rotação: `gradient_t` inverte a matriz dos eixos), angular em rect/círculo | **exato via textura** | textura CPU (≤ 256²) gerada uma vez por (chunk, versão, item, fill, alfa) e desenhada com `paint_image` + raios |
 | Idem em paths/elipses/rects rotacionados | **exato via fallback CPU** | textura `pen-raster` do item (linear de 2 paradas continua nativo) |
 | Imagem em rect axis-aligned (cover/contain/stretch/tile) | **nativo** | `paint_image` com recorte arredondado; tile = N sprites (máx. 4096, sem raio) |
 | Imagem em path/elipse | **exato via fallback CPU** | textura `pen-raster` do item (abaixo de 6 px de tela: cor média) |

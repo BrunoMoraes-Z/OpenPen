@@ -21,6 +21,7 @@ pub mod home;
 pub mod inspector;
 pub mod layers;
 pub mod overlay;
+pub mod preview;
 pub mod recent;
 pub mod save;
 pub mod scene_document;

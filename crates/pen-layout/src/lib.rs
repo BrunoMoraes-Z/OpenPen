@@ -20,6 +20,7 @@ pub mod script;
 pub mod shader;
 pub mod text;
 pub mod vector;
+pub mod vector_shapes;
 
 pub use assets::{AssetResolver, BundledIcons, FsAssets, IconGlyph, ImageLookup, NoAssets};
 pub use icons::{IconError, IconRef, bundled_icon, resolve_icon};

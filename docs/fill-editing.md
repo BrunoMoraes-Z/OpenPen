@@ -17,7 +17,9 @@ Do bundle do editor (`editor/assets/index.js`) e das strings da UI:
 - O editor de fill tem abas **Color / Gradient / Image / Shader** (ícones). Gradient tem um segmentado **Linear / Radial / Angular / Mesh**; Image tem **Stretch / Fill / Fit** (`stretch` / `cover` / `contain`) e um campo "Image path or URL" com o botão "Import image file".
 - Cada aba lembra o último valor da sessão. Os padrões são: cor `#d9d9d9`; gradiente linear com `rotation 0`, centro `(.5,.5)`, tamanho `(1,1)` e stops `#000000` → `#ffffff`; imagem com `url ""` e `mode cover`.
 - A barra de stops tem 24 px de altura, xadrez por baixo, um marcador de 20×20 com borda de 2 px (o selecionado fica com a borda `accent-active`) e um triângulo. Clicar na barra cria um stop com a cor interpolada e já começa a arrastá-lo. A lista "Stops" fica ordenada por posição: campo de % com 56 px, cor e "Remove color stop" (desabilitado com um stop só). O "+" cria o stop na metade entre os dois últimos.
-- No canvas, o modo de gradiente desliga os handles de resize. O linear mostra duas pontas; o radial e o angular mostram centro, raio e elipse. Os stops ficam deslocados para o lado da linha. Clicar na linha adiciona um stop. Delete/Backspace remove o stop selecionado. Os pontos encaixam nos cantos, nos meios das bordas e no centro da caixa (Ctrl desliga).
+- No canvas, o modo de gradiente desliga os handles de resize. O linear mostra duas pontas; o radial e o angular mostram centro, raio e elipse. O knob do segundo raio fica do lado **oposto** do `ellipsePoint` (`start - ellipse`). Arrastar o centro mantém o handle de raio parado: a elipse gira e muda de tamanho, e a largura acompanha na mesma proporção (alvo `center` do bundle). Arrastar o segundo raio projeta o ponteiro no eixo e grava `size.width = -2·projeção` (passar do centro deixa a largura negativa, como no Pen). Os stops ficam deslocados para o lado da linha. Clicar na linha adiciona um stop. Delete/Backspace remove o stop selecionado. Os pontos encaixam nos 4 cantos e nos 4 meios das bordas da caixa, não no centro (Ctrl desliga).
+- O renderer do Pen monta todo gradiente com a matriz de três pontos (`O2n`: centro, ponta do raio e `ellipsePoint`), calculados no espaço normalizado da caixa (girados em torno do centro) e depois escalados por largura e altura. Por isso um radial girado numa caixa não quadrada fica cisalhado.
+- O seletor de cor tem um botão de variável (ícone hexágono, "Apply variable" / "Variable: {nome}") que abre a lista do Pen: busca "Search variables...", "None" primeiro (separado por uma linha) e as variáveis de cor ordenadas por nome, com o valor à direita e a atual marcada.
 - Arquivos importados são copiados para a pasta do documento como `nome.ext`. Se já existe um arquivo igual, ele é reaproveitado; se o conteúdo é outro, o nome vira `nome-1.ext`, `nome-2.ext`… (`desktop-resource-device.js`, `importFiles`). O `url` gravado é relativo ao `.pen` (no corpus, por exemplo, `instalador/assets/logo.png`).
 - Com seleção múltipla e fills diferentes, o Pen mostra "Mixed fills".
 
@@ -45,7 +47,7 @@ Diferença intencional em relação ao Pen: ele restaura o último valor da aba 
 - **Cor do stop**: o picker (SV + matiz + hex + %) embaixo edita o stop selecionado ou, sem seleção, o primeiro por posição. Mudar a cor de um stop desfaz a ligação com a variável só nesse stop.
 - **Ângulo**: o campo "Angle" mostra o ângulo no sentido horário, como no CSS (90° = da esquerda para a direita). No arquivo, `rotation` é anti-horário, com 0 apontando para cima, e a conversão é `display = (-rotation) mod 360`.
 - **Delete/Backspace**: com um stop selecionado no popover (o foco vai para o popover) ou no canvas (`EditorState::delete_selection` trata o stop antes dos nós), remove o stop. O último stop nunca é removido.
-- **Handles no canvas** (`canvas_host/gradient.rs`): aparecem com o popover aberto num gradiente e um único nó selecionado. Os handles de resize somem e deixam de responder. No linear, as duas pontas definem centro, comprimento (`size.height`) e rotação. No radial e no angular, o centro move o gradiente inteiro, o handle de raio define `size.height` e a rotação, e o segundo handle define `size.width`. Arrastar um stop muda a posição dele. Clicar na linha (linear/radial) cria um stop. Os pontos encaixam nos 9 pontos da caixa (Ctrl desliga). Cada arrasto é um passo de undo (`begin_gesture`/`end_gesture`), com prévia ao vivo pelo `Pipeline::update` incremental. Clicar num handle não fecha o popover (`EditorState::fill_handle_drag`).
+- **Handles no canvas** (`canvas_host/gradient.rs`): aparecem com o popover aberto num gradiente e um único nó selecionado. Os handles de resize somem e deixam de responder. No linear, as duas pontas definem centro, comprimento (`size.height`) e rotação. No radial e no angular, o centro gira a elipse em volta do handle de raio parado (regra do Pen acima), o handle de raio define `size.height` e a rotação, e o segundo handle (do lado oposto) define `size.width`. Arrastar um stop muda a posição dele. Clicar na linha (linear/radial) cria um stop. Os pontos encaixam nos 8 pontos da borda da caixa (Ctrl desliga). Cada arrasto é um passo de undo (`begin_gesture`/`end_gesture`), com prévia ao vivo pelo `Pipeline::update` incremental. Clicar num handle não fecha o popover (`EditorState::fill_handle_drag`).
 - A geometria segue a do renderer (`pen-layout/src/display.rs`): o linear é calculado em espaço normalizado e depois escalado; o angular gira em pixels (`start = -90° - rotation`).
 
 ### Imagem
@@ -55,12 +57,47 @@ Diferença intencional em relação ao Pen: ele restaura o último valor da aba 
 - A opacidade fica no campo % da linha de fill. Em gradientes e imagens, esse campo é a `opacity` da paint; em sólidos, é o alfa da cor.
 - Depois de trocar o `url`, `EditorState::watch_assets` acompanha a decodificação em segundo plano até a imagem aparecer.
 
+### Radial girado (contrato da DisplayList)
+
+`pen_render::Paint::Radial` agora é `{ center, axis_x, axis_y, stops }`: o círculo unitário mapeado
+por `center + x·axis_x + y·axis_y` (`Paint::radial(center, radius, stops)` cria o caso alinhado aos
+eixos; `radial_to_unit` dá a inversa, `None` quando a elipse colapsa). O pen-layout preenche os
+eixos como o Pen: `axis_y` = (−sen r, −cos r)·`size.height`/2 e `axis_x` = (cos r, −sen r)·`size.width`/2
+no espaço normalizado, escalados pela caixa. Cada backend:
+
+| Backend | Como |
+|---|---|
+| pen-raster | `RadialGradient` do tiny-skia com o transform `from_row(axis_x, axis_y, center)` |
+| pen-canvas | O GPUI só tem gradiente linear; o radial já era uma textura feita na CPU (`gradient_texture`). `gradient_t` agora inverte a matriz dos eixos. Em paths o item continua indo para o fallback CPU (pen-raster). |
+| pen-export SVG/PDF | `<radialGradient cx=0 cy=0 r=1 gradientTransform="matrix(...)">` com a mesma matriz |
+
+Golden novo: `25_radial_rotated` (elipse girada num retângulo e elipse cisalhada numa elipse) no
+pen-raster, conferido contra o SVG exportado e rasterizado pelo resvg no pen-export. Nenhum golden
+existente mudou (sem rotação, a matriz é a mesma de antes).
+
 ### Variáveis, várias seleções e undo
 
 - Um fill sólido ligado a uma variável mostra um chip com o nome no lugar do hex, tanto na linha quanto no popover ("Variable"). Os stops ligados também mostram chip. As cores são resolvidas com o tema do nó (`SceneDoc::resolve_variable`).
+- **Ligar e soltar** (`PaintOp::BindColor { stop, var }`): o botão de variável do seletor abre a lista no lugar do corpo do popover; escolher uma variável grava `"$nome"` na cor sólida ou no stop que o seletor edita (o selecionado, ou o primeiro por posição). "None" solta: grava a cor resolvida como literal (`#RRGGBB`/`#RRGGBBAA`), como o `S==null ? resolvido` do campo do Pen. Soltar uma cor literal não faz nada. Um passo de undo; os outros campos do fill/stop são mantidos. A lista vem de `SceneDocument::color_variables` (variáveis `color` do documento, com o valor no tema do nó). Sombras e inputs de script não têm o botão.
 - Com vários nós selecionados e listas de fill diferentes, a seção mostra "Mixed fills" ("Mixed strokes" no stroke). O "+" adiciona um fill em todos. Com listas iguais, as edições valem para todos os nós.
 - Toda edição é um `PropEdit::Paint { stroke, index, op }` → um `DocOp::set` do campo `fill`/`stroke`, ou seja, um passo de undo. Arrastos (barra, picker, handles) ficam num único bloco. Campos desconhecidos do fill, dos stops, do centro e do tamanho são preservados porque a edição é feita sobre o `pen_schema::Fill` lido do documento.
 - Nós dentro de instâncias (sem nó de schema próprio) agora convertem gradientes e imagens resolvidos de volta para o schema (`schema_from_scene_paints`), em vez de descartá-los.
+
+## Foco ao fechar o popover (correção)
+
+Fechar o popover pelo X (ou clicando fora, ou de novo no swatch) removia o elemento que tinha o
+foco, e a janela ficava sem foco: Ctrl+Z e os outros atalhos do editor só voltavam depois de um
+clique no canvas. O `InspectorPanel` recebe o foco do canvas (`set_return_focus`, ligado pelo
+`Editor`) e `close_color_popover` devolve o foco a ele quando o foco estava no popover ou em lugar
+nenhum. O mesmo vale quando o popover some porque o alvo sumiu. Os outros popovers e diálogos
+(menus `DropdownMenu`/`PopupMenu` e diálogos do gpui-component) já restauram o foco anterior, e o
+menu de contexto do canvas já devolvia o foco.
+
+Também corrigido no mesmo arquivo: arrastos do inspector (scrub de campos, SV/matiz do seletor,
+stops na barra, reordenar fills) cujo botão subia antes de existir a captura da janela (down e up
+no mesmo frame) deixavam o bloco de undo aberto, e a edição seguinte entrava no mesmo passo.
+Agora o primeiro movimento sem botão encerra o arrasto. O painel de camadas tinha o mesmo
+problema, pior: o próximo clique em qualquer lugar soltava a camada ali (ela saía do frame).
 
 ## Cache de imagens (correção)
 
@@ -91,12 +128,16 @@ Feita no binário release, numa cópia de `testdata/user/maark.pen` em `target/f
 - `fill-image-reload.png`: o mesmo arquivo reescrito no disco e recarregado ao reativar a janela.
 - `fill-variable.png` / `fill-variable-gradient.png`: chip da variável `surface`, que continua ligada no 1º stop após virar gradiente.
 - `fill-mixed.png`: "Mixed fills" com dois nós de fills diferentes.
+- `fix-radial-rotated.png`: radial com `rotation: 30` num retângulo de 260×140, desenhado girado e cisalhado, com a elipse dos handles por cima.
+- `fix-radial-center-drag.png`: o centro arrastado; o handle de raio ficou no lugar e a elipse girou.
+- `fix-focus-undo.png`: popover fechado pelo X e Ctrl+Z logo em seguida (o arrasto acima foi desfeito).
+- `fix-variable-picker.png`, `fix-variable-bound.png`, `fix-variable-detached.png`: lista de variáveis no seletor, `brand` ligada (chip na linha e no popover) e solta com "None" (`3366FF` literal).
 
 ## Limitações conhecidas
 
-- **Radial girado**: `Paint::Radial` (pen-render) não tem rotação. O pen-layout troca os dois raios quando a rotação está mais perto de 90°/270° do que de 0°/180°, mas ângulos intermediários são desenhados alinhados aos eixos. Os handles mostram a elipse girada, que é a semântica do Pen. Por isso o handle de centro só translada: no Pen, ele mantém o raio fixo e gira a elipse.
+- **Angular**: o renderer gira a varredura em pixels; o Pen usa a mesma matriz de três pontos do radial (cisalhada em caixas não quadradas) e o sinal de `size.width`. Os handles do angular seguem o renderer.
 - **Mesh gradient e shader**: aparecem com o nome ("Mesh", "Shader") e podem ser convertidos pelas abas, mas não são editados aqui. O Pen tem editor próprio para os dois.
 - **Crop de imagem** (`transform`): é preservado, mas não há modo de crop no canvas. As ações de IA do Pen (remover fundo, vetorizar, aplicar shader) não existem.
-- **Variáveis**: dá para ver e manter a ligação, mas ainda não há seletor para ligar um fill ou stop a uma variável.
+- **Variáveis**: a lista abre dentro do popover (no Pen é um popover ao lado do campo); só as variáveis do documento aparecem (não as de bibliotecas importadas); a linha de fill do inspector não tem o botão de variável (só o seletor).
 - Cada aba não lembra o último valor da sessão (o Pen lembra). A conversão parte sempre do paint atual.
 - Imagens só recarregam ao reativar a janela; não há file watcher como o chokidar do Pen.

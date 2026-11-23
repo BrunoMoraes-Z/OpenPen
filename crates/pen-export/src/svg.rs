@@ -531,11 +531,14 @@ impl Writer<'_> {
             }
             Paint::Radial {
                 center,
-                radius,
+                axis_x,
+                axis_y,
                 stops,
             } => {
                 let last = stops.last()?;
-                if radius.x.abs() < 1e-6 || radius.y.abs() < 1e-6 || !radius.is_finite() {
+                if pen_render::radial_to_unit(*center, *axis_x, *axis_y).is_none()
+                    || !center.is_finite()
+                {
                     return Some(PaintRef::Color(last.color));
                 }
                 let id = self.id('g');
@@ -546,7 +549,7 @@ impl Writer<'_> {
                 transform_attr_named(
                     d,
                     "gradientTransform",
-                    &Affine2::from_cols_array(&[radius.x, 0.0, 0.0, radius.y, center.x, center.y]),
+                    &Affine2::from_cols(*axis_x, *axis_y, *center),
                 );
                 d.push('>');
                 self.gradient_stops(stops);

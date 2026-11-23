@@ -1,6 +1,8 @@
 //! On-canvas handles of the gradient open in the inspector's fill popover
 //! (docs/fill-editing.md): start/end points (linear), center / radius /
-//! second radius (radial, angular) and the color stops, all draggable with
+//! second radius (radial, angular; as in Pen, dragging the center keeps the
+//! radius handle in place and turns the ellipse) and the color stops, all
+//! draggable with
 //! live preview. Each drag is one undo step (`begin_gesture` /
 //! `end_gesture`); every move applies absolute values through the
 //! incremental update path. The geometry lives in `inspector::fill`.
@@ -147,7 +149,7 @@ impl CanvasHost {
         }
         let hp = fill::handle_points(&g, obb.w, obb.h);
         let mut handles = vec![(GradHandle::End, hp.end), (GradHandle::Start, hp.start)];
-        if let Some(w) = hp.width {
+        if let Some(w) = hp.width_knob() {
             handles.insert(0, (GradHandle::Width, w));
         }
         for (h, p) in handles {
@@ -244,8 +246,13 @@ impl CanvasHost {
                     let s = d.obb.t.matrix2.determinant().abs().sqrt().max(1e-6);
                     let tol = SNAP / (zoom * s);
                     let mut best = tol;
+                    // Pen's 8 snap points: corners and edge midpoints
+                    // (not the center).
                     for u in [0.0, 0.5, 1.0] {
                         for vv in [0.0, 0.5, 1.0] {
+                            if u == 0.5 && vv == 0.5 {
+                                continue;
+                            }
                             let q = Vec2::new(u * w, vv * h);
                             let dist = q.distance(lp);
                             if dist < best {
@@ -336,9 +343,8 @@ impl CanvasHost {
             }
         };
         line(window, &[s0, s1], false);
-        if let Some(wp) = hp.width {
-            let sw = local(wp);
-            line(window, &[s0, sw], false);
+        if let (Some(wp), Some(knob)) = (hp.width, hp.width_knob()) {
+            line(window, &[s0, local(knob)], false);
             // Ellipse outline through both radii.
             let c = v(hp.start);
             let a = v(hp.end) - c;
@@ -366,7 +372,7 @@ impl CanvasHost {
             ));
         };
         let mut knobs = vec![s0, s1];
-        if let Some(wp) = hp.width {
+        if let Some(wp) = hp.width_knob() {
             knobs.push(local(wp));
         }
         for k in knobs {

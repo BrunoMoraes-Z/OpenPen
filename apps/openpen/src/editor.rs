@@ -41,6 +41,8 @@ impl Editor {
         let layers = cx.new(|cx| LayersPanel::new(state.clone(), cx));
         let inspector = cx.new(|cx| InspectorPanel::new(state.clone(), window, cx));
         let canvas = cx.new(|cx| CanvasHost::new(state.clone(), cx));
+        let canvas_focus = canvas.read(cx).focus_handle(cx);
+        inspector.update(cx, |i, _| i.set_return_focus(canvas_focus));
         let subs = vec![cx.observe(&state, |_, _, cx| cx.notify())];
         Self {
             state,

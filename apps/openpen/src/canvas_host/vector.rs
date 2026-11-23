@@ -15,9 +15,9 @@ use pen_layout::path::parse_svg_path;
 use pen_layout::vector::{
     Anchor, AnchorRef, Contour, Mirror, SegmentHit, Side, VectorPath, constrain_45,
 };
-use pen_layout::{NodeLayout, local_transform};
+use pen_layout::{NodeLayout, local_transform, vector_shapes};
 use pen_render::{Affine2, Rect, Vec2};
-use pen_schema::{self as ps, Bind};
+use pen_schema::{self as ps, Bind, NodeField};
 
 use super::{CanvasHost, Gesture, rgb_u};
 use crate::geom::{Guide, rect_from_points, snap_rect};
@@ -54,6 +54,10 @@ pub(super) struct Session {
     pub node: Option<NodeKey>,
     /// Frame receiving a new path (while `node` is `None`).
     parent: Option<NodeKey>,
+    /// The node is a rectangle / ellipse / polygon / line edited as a path:
+    /// it becomes a `path` on the first write (Pen's `changeShapeType`).
+    /// Its geometry space is the node's local box.
+    shape: bool,
     /// Geometry `path` was parsed from, and its tight bounds.
     geom: Arc<str>,
     bounds: [f32; 4],
@@ -121,6 +125,114 @@ pub(super) fn editable_path(doc: &SceneDocument, k: NodeKey) -> bool {
             && !n.flags.has(NodeFlags::INSTANCE)
             && matches!(n.data, KindData::Path(_))
     })
+}
+
+/// Editable contours of a rectangle, ellipse, polygon or line of the
+/// document (Pen's `getEditableContours`), in the node's local box. A
+/// rectangle with an image fill is left alone (Pen crops the image there).
+pub(super) fn shape_contours(doc: &SceneDocument, k: NodeKey) -> Option<VectorPath> {
+    let n = doc.get(k)?;
+    if !matches!(n.origin, Origin::Doc) || n.flags.has(NodeFlags::INSTANCE) {
+        return None;
+    }
+    let l = doc.pipe.layout.get(k)?;
+    let (w, h) = (l.w, l.h);
+    let p = match (&n.kind, &n.data) {
+        (Kind::Rectangle, _) => {
+            let image = n
+                .fills
+                .iter()
+                .any(|f| matches!(f.paint, pen_doc::PaintSpec::Image(_)));
+            if image {
+                return None;
+            }
+            vector_shapes::rect(w, h, n.corner_radius)
+        }
+        (
+            Kind::Ellipse,
+            KindData::Ellipse {
+                inner_radius,
+                start_angle,
+                sweep_angle,
+            },
+        ) => vector_shapes::ellipse(w, h, *inner_radius, *start_angle, *sweep_angle),
+        (Kind::Ellipse, _) => vector_shapes::ellipse(w, h, 0.0, 0.0, 360.0),
+        (
+            Kind::Polygon,
+            KindData::Polygon {
+                count,
+                corner_radius,
+            },
+        ) => vector_shapes::polygon(w, h, *count, *corner_radius),
+        (Kind::Line, _) => vector_shapes::line(w, h),
+        _ => return None,
+    };
+    (!p.contours.is_empty()).then_some(p)
+}
+
+/// Turns shape `k` into a `path` node with geometry `path` (node-local
+/// coordinates): same id, place, paints and unknown fields, the
+/// shape-only fields dropped, the box fitted to the geometry's tight bounds
+/// (as Pen's first write). Delete + insert in the open undo block. Returns
+/// the new key.
+pub(super) fn convert_to_path(
+    doc: &mut SceneDocument,
+    k: NodeKey,
+    path: &VectorPath,
+) -> Option<NodeKey> {
+    let d = path.to_svg();
+    if d.is_empty() {
+        return None;
+    }
+    let n = doc.get(k)?.clone();
+    let l = doc.pipe.layout.get(k)?.clone();
+    let in_flex = doc.in_flex(k);
+    let mut node = doc.scene.schema_node(&n.id)?.clone();
+    let b = parse_svg_path(&d).bounds;
+    let (w, h) = (b[2] - b[0], b[3] - b[1]);
+    let t_old = local_transform(&n, &l);
+    let t_new = local_transform(
+        &n,
+        &NodeLayout {
+            x: 0.0,
+            y: 0.0,
+            w,
+            h,
+            text: None,
+        },
+    );
+    let xy = t_old.transform_point2(Vec2::new(b[0], b[1])) - t_new.transform_point2(Vec2::ZERO);
+    let allowed = ps::allowed_fields(&ps::NodeKind::Path);
+    for &f in NodeField::ALL {
+        if allowed & f.bit() == 0 {
+            node.clear(f);
+        }
+    }
+    node.kind = Some(ps::NodeKind::Path);
+    node.geometry = Some(d);
+    node.view_box = None;
+    if !in_flex {
+        node.x = Some(round3(xy.x));
+        node.y = Some(round3(xy.y));
+    }
+    node.width = Some(ps::Sizing::Fixed(round3(w.max(0.0))));
+    node.height = Some(ps::Sizing::Fixed(round3(h.max(0.0))));
+    let (parent, index) = match n.parent {
+        Some(p) => (
+            Some(doc.get(p)?.id.clone()),
+            doc.scene.children(p).iter().position(|&c| c == k)?,
+        ),
+        None => (None, doc.scene.roots().iter().position(|&c| c == k)?),
+    };
+    if !doc.apply_op(DocOp::Delete { id: n.id.clone() }) {
+        return None;
+    }
+    doc.apply_op(DocOp::Insert {
+        parent,
+        index,
+        node: Box::new(node),
+    });
+    doc.scene.find(&n.id)
 }
 
 /// Geometry -> world map of path node `k` (same mapping as the renderer's
@@ -279,6 +391,7 @@ impl Session {
         Session {
             node,
             parent,
+            shape: false,
             geom: Arc::from(""),
             bounds: [0.0; 4],
             path: VectorPath::default(),
@@ -297,8 +410,10 @@ impl Session {
     pub(super) fn sync(&mut self, doc: &SceneDocument) -> bool {
         let Some(k) = self.node else { return true };
         let Some(g) = path_geometry(doc, k) else {
-            return false;
+            // A shape not converted yet keeps its in-memory contours.
+            return self.shape && doc.get(k).is_some();
         };
+        self.shape = false;
         if !Arc::ptr_eq(&g, &self.geom) {
             if *g != *self.geom {
                 let p = VectorPath::parse(&g);
@@ -324,9 +439,50 @@ impl Session {
     }
 
     fn to_world(&self, doc: &SceneDocument) -> Affine2 {
-        self.node
-            .and_then(|k| geometry_to_world(doc, k, self.bounds))
-            .unwrap_or(Affine2::IDENTITY)
+        let Some(k) = self.node else {
+            return Affine2::IDENTITY;
+        };
+        if self.shape {
+            return doc.world_obb(k).map_or(Affine2::IDENTITY, |o| o.t);
+        }
+        geometry_to_world(doc, k, self.bounds).unwrap_or(Affine2::IDENTITY)
+    }
+
+    /// Pen's `stopAppending`: the pen stops extending a contour; contours
+    /// left with a single point are dropped.
+    fn stop_appending(&mut self) {
+        if self.append.take().is_none() {
+            return;
+        }
+        self.preview = None;
+        let keep: Vec<bool> = self
+            .path
+            .contours
+            .iter()
+            .map(|c| c.closed || c.is_drawable())
+            .collect();
+        if keep.iter().all(|&k| k) {
+            return;
+        }
+        let mut map = Vec::with_capacity(keep.len());
+        let mut next = 0;
+        for &k in &keep {
+            map.push(k.then(|| {
+                next += 1;
+                next - 1
+            }));
+        }
+        let mut i = 0;
+        self.path.contours.retain(|_| {
+            i += 1;
+            keep[i - 1]
+        });
+        self.sel = self
+            .sel
+            .iter()
+            .filter_map(|&(c, a)| map.get(c).copied().flatten().map(|c| (c, a)))
+            .collect();
+        self.hover = None;
     }
 
     /// Anchor the pen extends, and the side its next segment leaves from.
@@ -408,15 +564,21 @@ impl Session {
 impl CanvasHost {
     /// Starts editing path `k` (double click / Enter).
     pub(super) fn enter_vector(&mut self, k: NodeKey, cx: &mut Context<Self>) -> bool {
-        let ok = editable_path(&self.state.read(cx).doc, k);
-        if !ok {
-            return false;
-        }
+        let doc = &self.state.read(cx).doc;
         let mut s = Session::new(Some(k), None);
-        if !s.sync(&self.state.read(cx).doc) {
+        if editable_path(doc, k) {
+            if !s.sync(doc) {
+                return false;
+            }
+        } else if let Some(p) = shape_contours(doc, k) {
+            // Edited as a path; converted on the first change (Pen).
+            s.shape = true;
+            s.path = p;
+        } else {
             return false;
         }
         self.vector = Some(s);
+        self.sync_path_mode(cx);
         self.hover = None;
         self.hover_handle = None;
         self.state.update(cx, |st, cx| {
@@ -432,6 +594,7 @@ impl CanvasHost {
     /// Leaves vector edit mode, selecting the edited path.
     pub(super) fn exit_vector(&mut self, cx: &mut Context<Self>) {
         let Some(s) = self.vector.take() else { return };
+        self.sync_path_mode(cx);
         if matches!(self.gesture, Gesture::Vector(_)) {
             self.gesture = Gesture::None;
             self.state.update(cx, |st, cx| {
@@ -453,8 +616,52 @@ impl CanvasHost {
 
     /// After document / tool changes: keeps the session in step or ends it.
     pub(super) fn vector_sync(&mut self, cx: &mut Context<Self>) {
+        let (tool, done, sel) = {
+            let st = self.state.read(cx);
+            (st.tool, st.path_done_requested, st.selection.clone())
+        };
+        let entered_pen = tool == Tool::Pen && self.prev_tool != Tool::Pen;
+        self.prev_tool = tool;
+        if done {
+            self.state
+                .update(cx, |st, _| st.path_done_requested = false);
+            if self.vector.is_some() {
+                self.vector_enter(cx);
+            }
+        }
+        // Pen picked with one path / shape selected: edit it with the pen.
+        if entered_pen
+            && self.vector.is_none()
+            && let [one] = sel.as_slice()
+        {
+            let k = crate::scene_document::key_of(*one);
+            self.enter_vector(k, cx);
+        }
+        self.vector_sync_inner(cx);
+        self.sync_path_mode(cx);
+    }
+
+    /// Mirrors "vector edit mode is on" into the editor state (the toolbar
+    /// shows the path sub-tools).
+    fn sync_path_mode(&mut self, cx: &mut Context<Self>) {
+        let mode = self.vector.as_ref().is_some_and(|s| s.node.is_some());
+        if self.state.read(cx).path_mode != mode {
+            self.state.update(cx, |st, cx| {
+                st.path_mode = mode;
+                if !mode {
+                    st.path_cut = false;
+                }
+                cx.notify();
+            });
+        }
+    }
+
+    fn vector_sync_inner(&mut self, cx: &mut Context<Self>) {
         let Some(s) = &mut self.vector else { return };
         let st = self.state.read(cx);
+        if st.tool != Tool::Pen && s.append.is_some() {
+            s.stop_appending();
+        }
         let alive = s.sync(&st.doc);
         let tool_ok = matches!(st.tool, Tool::Move | Tool::Pen);
         let sel_ok = match s.node {
@@ -597,12 +804,15 @@ impl CanvasHost {
         let zoom = self.zoom(cx);
         let m = ev.modifiers;
         let pen = tool == Tool::Pen;
+        let cut = !pen && self.state.read(cx).path_cut;
         let (to_world, hit) = {
             let s = self.vector.as_ref().unwrap();
             let w = s.to_world(&self.state.read(cx).doc);
-            (w, s.hit(&w, p, zoom, pen && !m.alt))
+            (w, s.hit(&w, p, zoom, (pen && !m.alt) || cut))
         };
-        if pen {
+        if cut {
+            self.cut_down(hit, cx);
+        } else if pen {
             self.pen_down(ev, p, hit, to_world, cx);
         } else {
             self.select_down(ev, p, hit, to_world, cx);
@@ -622,8 +832,27 @@ impl CanvasHost {
     /// when only a contour with one point changed).
     fn vec_write(&mut self, cx: &mut Context<Self>) {
         let Some(s) = &self.vector else { return };
-        let Some(k) = s.node else { return };
+        let Some(mut k) = s.node else { return };
         let path = s.path.clone();
+        if s.shape {
+            if !path.contours.iter().any(|c| c.is_drawable()) {
+                return;
+            }
+            let made = self.state.update(cx, |st, cx| {
+                let made = convert_to_path(&mut st.doc, k, &path);
+                st.changed(cx);
+                if let Some(n) = made {
+                    st.set_selection(vec![id_of(n)], cx);
+                }
+                made
+            });
+            let Some(n) = made else { return };
+            k = n;
+            if let Some(s) = &mut self.vector {
+                s.node = Some(n);
+                s.shape = false;
+            }
+        }
         self.state.update(cx, |st, cx| {
             if write_path(&mut st.doc, k, &path) {
                 st.changed(cx);
@@ -707,6 +936,22 @@ impl CanvasHost {
             return;
         }
         match hit {
+            // Alt: move the point (Pen); a middle point otherwise starts a
+            // new contour from its position.
+            Some(Hit::Anchor(r)) if m.alt => {
+                let s = self.vector.as_mut().unwrap();
+                s.sel = vec![r];
+                self.start_points_drag(p, Some(r), screen0, to_world, None, cx);
+            }
+            Some(Hit::Anchor(r))
+                if self.vector.as_ref().unwrap().path.contours[r.0]
+                    .endpoint(r.1)
+                    .is_none() =>
+            {
+                let s = self.vector.as_ref().unwrap();
+                let g = s.path.anchor(r).unwrap().p;
+                self.pen_start_contour(g, to_world, screen0, cx);
+            }
             Some(Hit::Anchor(r)) => {
                 let s = self.vector.as_mut().unwrap();
                 if let Some(side) = s.path.contours[r.0].endpoint(r.1) {
@@ -735,37 +980,89 @@ impl CanvasHost {
                     self.start_points_drag(p, Some(r), screen0, to_world, None, cx);
                 }
             }
-            Some(Hit::Segment(h)) => self.insert_point(h.contour, h.segment, h.t, p, screen0, cx),
-            Some(Hit::Midpoint(ci, si)) => self.insert_point(ci, si, 0.5, p, screen0, cx),
-            Some(Hit::Handle(..)) => {}
+            // Alt+click on a segment inserts a point (Pen); a plain click
+            // starts a new contour there.
+            Some(Hit::Segment(h)) if m.alt => {
+                self.insert_point(h.contour, h.segment, h.t, p, screen0, cx)
+            }
+            Some(Hit::Midpoint(ci, si)) if m.alt => self.insert_point(ci, si, 0.5, p, screen0, cx),
+            Some(Hit::Segment(h)) => {
+                let s = self.vector.as_ref().unwrap();
+                let at = s.path.contours[h.contour]
+                    .segment(h.segment)
+                    .map(|sg| sg.at(h.t));
+                if let Some(g) = at {
+                    self.pen_start_contour(g, to_world, screen0, cx);
+                }
+            }
+            Some(Hit::Midpoint(..)) | Some(Hit::Handle(..)) => {}
             None => {
                 // A new contour (in the edited path, or the first point of a
                 // new path).
                 let (target, _) = self.pen_target(p, m, cx);
-                let s = self.vector.as_mut().unwrap();
                 let g = to_world.inverse().transform_point2(target);
-                s.path
-                    .contours
-                    .push(Contour::new(vec![Anchor::corner(g)], false));
-                let ci = s.path.contours.len() - 1;
-                s.append = Some((ci, Side::Out));
-                s.sel = vec![(ci, 0)];
-                let orig = s.path.clone();
-                self.begin_drag(
-                    Drag::Handle {
-                        r: (ci, 0),
-                        side: Side::Out,
-                        mirror: Mirror::Full,
-                        orig,
-                        to_world,
-                        screen0,
-                        moved: false,
-                        connect: false,
-                    },
-                    cx,
-                );
+                self.pen_start_contour(g, to_world, screen0, cx);
             }
         }
+    }
+
+    /// Pen's `startContour`: a new open contour at geometry point `g`, the
+    /// pen extending it, its first handle following the drag.
+    fn pen_start_contour(
+        &mut self,
+        g: Vec2,
+        to_world: Affine2,
+        screen0: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let s = self.vector.as_mut().unwrap();
+        s.path
+            .contours
+            .push(Contour::new(vec![Anchor::corner(g)], false));
+        let ci = s.path.contours.len() - 1;
+        s.append = Some((ci, Side::Out));
+        s.sel = vec![(ci, 0)];
+        let orig = s.path.clone();
+        self.begin_drag(
+            Drag::Handle {
+                r: (ci, 0),
+                side: Side::Out,
+                mirror: Mirror::Full,
+                orig,
+                to_world,
+                screen0,
+                moved: false,
+                connect: false,
+            },
+            cx,
+        );
+    }
+
+    /// Cut tool (X): splits the path at an anchor, or at the clicked point of
+    /// a segment, then switches to point selection (Pen). One undo step.
+    fn cut_down(&mut self, hit: Option<Hit>, cx: &mut Context<Self>) {
+        let Some(s) = self.vector.as_mut() else {
+            return;
+        };
+        let mut path = s.path.clone();
+        let at = match hit {
+            Some(Hit::Anchor(r)) => Some(r),
+            Some(Hit::Segment(h)) => path.split_segment(h.contour, h.segment, h.t),
+            Some(Hit::Midpoint(ci, si)) => path.split_segment(ci, si, 0.5),
+            _ => None,
+        };
+        if !at.is_some_and(|r| path.cut_at(r)) {
+            return;
+        }
+        s.path = path;
+        s.sel.clear();
+        s.hover = None;
+        self.state.update(cx, |st, _| st.begin_gesture());
+        self.vec_write(cx);
+        self.state.update(cx, |st, cx| {
+            st.end_gesture(cx);
+            st.set_tool(Tool::Move, cx);
+        });
     }
 
     /// Adds a point at world `target` to the contour being extended; creates
@@ -1170,9 +1467,10 @@ impl CanvasHost {
         } else {
             (None, Vec::new())
         };
+        let cut = !pen && self.state.read(cx).path_cut;
         let Some(s) = &mut self.vector else { return };
         let w = s.to_world(&self.state.read(cx).doc);
-        let hit = s.hit(&w, p, zoom, pen && !m.alt);
+        let hit = s.hit(&w, p, zoom, (pen && !m.alt) || cut);
         let hit = if appending {
             // While drawing only the closing anchor and handles react.
             match hit {
@@ -1193,19 +1491,75 @@ impl CanvasHost {
 
     // ---------------------------------------------------------- keyboard
 
-    /// Escape: stop drawing / clear the point selection / leave the mode.
+    /// Escape, as Pen: stop drawing (the mode stays on), then clear the
+    /// point selection, then switch the pen / cut to point selection, then
+    /// leave the mode.
     pub(super) fn vector_escape(&mut self, cx: &mut Context<Self>) -> bool {
+        let (tool, cut) = {
+            let st = self.state.read(cx);
+            (st.tool, st.path_cut)
+        };
         let Some(s) = &mut self.vector else {
             return false;
         };
         if s.node.is_none() {
             self.vector = None;
             self.state.update(cx, |st, cx| st.set_tool(Tool::Move, cx));
-        } else if s.append.is_some() || s.sel.is_empty() {
-            self.exit_vector(cx);
-        } else {
+        } else if s.append.is_some() {
+            s.stop_appending();
+        } else if !s.sel.is_empty() {
             s.sel.clear();
+        } else if tool == Tool::Pen || cut {
+            self.state.update(cx, |st, cx| st.set_tool(Tool::Move, cx));
+        } else {
+            self.exit_vector(cx);
         }
+        cx.notify();
+        true
+    }
+
+    /// X: the cut sub-tool (Pen's `pen_cut`; clears the point selection).
+    pub(super) fn vector_cut_tool(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(s) = &mut self.vector else {
+            return false;
+        };
+        if s.node.is_none() {
+            return true;
+        }
+        s.stop_appending();
+        s.sel.clear();
+        self.state.update(cx, |st, cx| {
+            st.set_tool(Tool::Move, cx);
+            st.path_cut = true;
+            cx.notify();
+        });
+        cx.notify();
+        true
+    }
+
+    /// Ctrl+J: joins the selected points (point selection only, as Pen).
+    /// One undo step.
+    pub(super) fn vector_join(&mut self, cx: &mut Context<Self>) -> bool {
+        let select = {
+            let st = self.state.read(cx);
+            st.tool == Tool::Move && !st.path_cut
+        };
+        let Some(s) = &mut self.vector else {
+            return false;
+        };
+        if !select || s.node.is_none() {
+            return true;
+        }
+        let mut path = s.path.clone();
+        let Some(sel) = path.join_anchors(&s.sel) else {
+            return true;
+        };
+        s.path = path;
+        s.sel = sel;
+        s.hover = None;
+        self.state.update(cx, |st, _| st.begin_gesture());
+        self.vec_write(cx);
+        self.state.update(cx, |st, cx| st.end_gesture(cx));
         cx.notify();
         true
     }
@@ -1306,6 +1660,7 @@ impl CanvasHost {
         let white = rgb_u(0xffffff);
         let path = &s.path;
         let tool_pen = self.state.read(cx).tool == Tool::Pen;
+        let cut = !tool_pen && self.state.read(cx).path_cut;
 
         // Outline of the whole path.
         let mut pb = PathBuilder::stroke(px(1.));
@@ -1335,9 +1690,11 @@ impl CanvasHost {
             Some(Hit::Midpoint(ci, si)) => Some((ci, si, true)),
             _ => None,
         };
+        // With the pen the segment lights up only with Alt (insert point).
         if let Some((ci, si, on_mid)) = seg_hover
             && let Some(sg) = path.contours.get(ci).and_then(|c| c.segment(si))
             && s.append.is_none()
+            && (!tool_pen || self.alt)
         {
             let mut pb = PathBuilder::stroke(px(2.5));
             pb.move_to(pt(sg.p0));
@@ -1349,10 +1706,20 @@ impl CanvasHost {
             if let Ok(p) = pb.build() {
                 window.paint_path(p, blue.opacity(0.4));
             }
-            if !sg.curve && !tool_pen {
+            if !sg.curve && !tool_pen && !cut {
                 let d = if on_mid { ANCHOR_HOVER } else { ANCHOR };
                 paint_dot(window, pt(sg.at(0.5)), d, white, blue);
             }
+        }
+        if let Some(Hit::Segment(h)) = s.hover
+            && cut
+            && let Some(sg) = path
+                .contours
+                .get(h.contour)
+                .and_then(|c| c.segment(h.segment))
+        {
+            // Cut tool: where the path will be cut (Pen: filled blue, 7 px).
+            paint_dot(window, pt(sg.at(h.t)), 7.0, blue, white);
         }
         if let Some(Hit::Segment(h)) = s.hover
             && tool_pen
@@ -1547,8 +1914,8 @@ mod tests {
     // Not `super::*`: `gpui_kit::*` would shadow `#[test]` with GPUI's.
     use super::{
         Anchor, Bind, Contour, DocOp, KindData, Mirror, SceneDocument, Vec2, VectorPath,
-        create_path, geometry_to_world, handle_mirror, parse_svg_path, path_geometry, ps,
-        write_path,
+        convert_to_path, create_path, geometry_to_world, handle_mirror, parse_svg_path,
+        path_geometry, ps, shape_contours, write_path,
     };
     use gpui_kit::Modifiers;
     use std::sync::Arc;
@@ -1599,6 +1966,77 @@ mod tests {
             m.transform_point2(Vec2::ZERO)
                 .distance(Vec2::new(100.0, 50.0))
                 < 1e-4
+        );
+    }
+
+    #[test]
+    fn shapes_become_paths_like_pen() {
+        let json = r##"{"version":"2.22","children":[
+            {"type":"rectangle","id":"r","x":10,"y":20,"width":100,"height":50,"cornerRadius":8,
+             "fill":"#ff0000","rotation":30,"future":1},
+            {"type":"polygon","id":"p","x":0,"y":0,"width":100,"height":100,"polygonCount":3},
+            {"type":"rectangle","id":"img","x":0,"y":0,"width":10,"height":10,
+             "fill":{"type":"image","url":"a.png"}}]}"##;
+        let mut d = SceneDocument::from_bytes(json.as_bytes(), None, &[])
+            .unwrap()
+            .0;
+        let r = d.scene.find("r").unwrap();
+        let before = d.world_obb(r).unwrap();
+        let path = shape_contours(&d, r).unwrap();
+        // Rounded corners: two anchors each.
+        assert_eq!(path.contours[0].anchors.len(), 8);
+        assert!(shape_contours(&d, d.scene.find("img").unwrap()).is_none());
+        d.begin();
+        let k = convert_to_path(&mut d, r, &path).unwrap();
+        d.commit();
+        d.flush();
+        let j: serde_json::Value = serde_json::from_str(&d.save_string()).unwrap();
+        let n = &j["children"][0];
+        assert_eq!(n["type"], "path");
+        assert_eq!(n["id"], "r");
+        assert!(n.get("cornerRadius").is_none());
+        assert_eq!(
+            (n["fill"].as_str(), n["future"].as_i64()),
+            (Some("#ff0000"), Some(1))
+        );
+        assert!(n["geometry"].as_str().unwrap().starts_with("M0 8 C"));
+        // Same place on the canvas (the box is the tight bounds of the
+        // geometry, here the full rectangle).
+        let after = geometry_to_world(
+            &d,
+            k,
+            parse_svg_path(n["geometry"].as_str().unwrap()).bounds,
+        )
+        .unwrap();
+        for p in [Vec2::ZERO, Vec2::new(100.0, 50.0), Vec2::new(30.0, 0.0)] {
+            assert!(
+                after
+                    .transform_point2(p)
+                    .distance(before.t.transform_point2(p))
+                    < 1e-3,
+                "{p}"
+            );
+        }
+        // One undo step brings the rectangle back.
+        assert!(d.undo());
+        d.flush();
+        let j: serde_json::Value = serde_json::from_str(&d.save_string()).unwrap();
+        assert_eq!(j["children"][0]["type"], "rectangle");
+        // A triangle's box shrinks to its tight bounds, the drawing stays.
+        let p = d.scene.find("p").unwrap();
+        let tri = shape_contours(&d, p).unwrap();
+        d.begin();
+        let k = convert_to_path(&mut d, p, &tri).unwrap();
+        d.commit();
+        d.flush();
+        let l = d.pipe.layout.get(k).unwrap();
+        assert!(
+            (l.y - 0.0).abs() < 1e-3 && (l.h - 75.0).abs() < 1e-3,
+            "{l:?}"
+        );
+        assert!(
+            (l.x - 6.699).abs() < 1e-2 && (l.w - 86.603).abs() < 1e-2,
+            "{l:?}"
         );
     }
 

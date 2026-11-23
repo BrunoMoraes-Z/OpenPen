@@ -311,16 +311,18 @@ pub fn shader<'a>(
         }
         Paint::Radial {
             center,
-            radius,
+            axis_x,
+            axis_y,
             stops: s,
         } => {
             if s.is_empty() {
                 return None;
             }
-            if radius.x.abs() < 1e-6 || radius.y.abs() < 1e-6 {
+            if pen_render::radial_to_unit(*center, *axis_x, *axis_y).is_none() {
                 return last_color(s);
             }
-            let ts = Transform::from_row(radius.x, 0.0, 0.0, radius.y, center.x, center.y);
+            let ts =
+                Transform::from_row(axis_x.x, axis_x.y, axis_y.x, axis_y.y, center.x, center.y);
             RadialGradient::new(
                 Point::zero(),
                 Point::zero(),

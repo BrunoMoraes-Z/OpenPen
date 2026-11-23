@@ -15,7 +15,7 @@ use gpui_kit::*;
 use crate::actions::*;
 use crate::editor::Editor;
 use crate::editor_state::EditorState;
-use crate::home::{HomeAction, render_home};
+use crate::home::{HomeEvent, HomeView};
 use crate::scene_document::SceneDocument;
 use crate::theme::{self, Palette, PaletteExt, island, metrics};
 use crate::{fonts, recent, save};
@@ -43,6 +43,9 @@ pub struct Workspace {
     /// Last document tab that was active (agent calls without `uri` go to
     /// it while Home is shown).
     last_doc: Option<WeakEntity<EditorState>>,
+    /// The Home dashboard (kept alive so thumbnails and state survive tab
+    /// switches).
+    home: Entity<HomeView>,
     _subs: Vec<Subscription>,
 }
 
@@ -88,7 +91,17 @@ pub fn cli_paths(args: impl IntoIterator<Item = String>) -> Vec<PathBuf> {
 
 impl Workspace {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let home = cx.new(|cx| HomeView::new(window, cx));
         let subs = vec![
+            cx.subscribe_in(
+                &home,
+                window,
+                |this, _, ev: &HomeEvent, window, cx| match ev {
+                    HomeEvent::NewFile => this.new_file(window, cx),
+                    HomeEvent::OpenDialog => this.open_dialog(window, cx),
+                    HomeEvent::Open(p) => this.open_path(p.clone(), window, cx),
+                },
+            ),
             cx.observe_window_appearance(window, |this, window, cx| {
                 if this.theme_override.is_none() {
                     theme::apply(theme::mode_for(window.appearance()), cx);
@@ -118,6 +131,7 @@ impl Workspace {
             untitled: 0,
             force_close: false,
             last_doc: None,
+            home,
             _subs: subs,
         };
         for path in cli_paths(std::env::args()) {
@@ -238,6 +252,23 @@ impl Workspace {
         .detach();
     }
 
+    /// Opens the `.pen` files of a drop on the window.
+    fn open_dropped(&mut self, paths: &ExternalPaths, window: &mut Window, cx: &mut Context<Self>) {
+        let pens: Vec<PathBuf> = paths
+            .paths()
+            .iter()
+            .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("pen")))
+            .cloned()
+            .collect();
+        if pens.is_empty() {
+            window.push_notification("OpenPen can only open .pen files.", cx);
+            return;
+        }
+        for p in pens {
+            self.open_path(p, window, cx);
+        }
+    }
+
     fn activate(&mut self, ix: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
         self.active = ix.filter(|&i| i < self.tabs.len());
         match self.active {
@@ -249,7 +280,9 @@ impl Workspace {
                 window.set_window_title(&format!("{name} — OpenPen"));
             }
             None => {
-                self.focus.focus(window, cx);
+                let h = self.home.read(cx).focus_handle().clone();
+                h.focus(window, cx);
+                self.home.update(cx, |h, cx| h.refresh(cx));
                 window.set_window_title("OpenPen");
             }
         }
@@ -918,7 +951,7 @@ fn app_menu(m: PopupMenu, window: &mut Window, cx: &mut Context<PopupMenu>) -> P
         m.menu("New File", Box::new(NewFile))
             .menu("Open…", Box::new(OpenFile))
             .submenu("Open Recent", window, cx, |mut m, _, cx| {
-                let list = recent::list(cx);
+                let list = recent::menu_list(cx);
                 if list.is_empty() {
                     m = m.item(PopupMenuItem::new("No recent files").disabled(true));
                 }
@@ -1030,21 +1063,9 @@ pub fn set_app_menus(cx: &mut App) {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = cx.pal();
-        let weak = cx.entity().downgrade();
         let body: AnyElement = match self.active {
             Some(i) => self.tabs[i].editor.clone().into_any_element(),
-            None => render_home(
-                &recent::list(cx),
-                move |action, window, cx| {
-                    let _ = weak.update(cx, |this, cx| match action {
-                        HomeAction::New => this.new_file(window, cx),
-                        HomeAction::Open => this.open_dialog(window, cx),
-                        HomeAction::OpenPath(p) => this.open_path(p, window, cx),
-                    });
-                },
-                cx,
-            )
-            .into_any_element(),
+            None => self.home.clone().into_any_element(),
         };
         div()
             .id("workspace")
@@ -1068,6 +1089,8 @@ impl Render for Workspace {
             .on_action(cx.listener(|t, _: &Save, w, cx| t.save_active(false, w, cx)))
             .on_action(cx.listener(|t, _: &SaveAs, w, cx| t.save_active(true, w, cx)))
             .on_action(cx.listener(|t, _: &OpenFile, w, cx| t.open_dialog(w, cx)))
+            // `.pen` files dropped anywhere on the window open in tabs.
+            .on_drop(cx.listener(|t, paths: &ExternalPaths, w, cx| t.open_dropped(paths, w, cx)))
             .on_action(|_: &OpenSettings, w, cx| Self::not_yet("Settings", w, cx))
             .on_action(|_: &CommandPalette, w, cx| Self::not_yet("The command palette", w, cx))
             .on_action(|_: &ShowShortcuts, w, cx| Self::not_yet("The shortcuts dialog", w, cx))

@@ -262,17 +262,17 @@ fn synthetic(frames: usize) -> DisplayList {
                         size: Vec2::new(30.0, 20.0),
                         radii: CornerRadii::uniform(4.0),
                     },
-                    fills: smallvec![Paint::Radial {
-                        center: Vec2::new(15.0, 10.0),
-                        radius: Vec2::new(15.0, 10.0),
-                        stops: smallvec![
+                    fills: smallvec![Paint::radial(
+                        Vec2::new(15.0, 10.0),
+                        Vec2::new(15.0, 10.0),
+                        smallvec![
                             GradientStop {
                                 offset: 0.0,
                                 color: Color::WHITE
                             },
                             GradientStop { offset: 1.0, color },
-                        ],
-                    }],
+                        ]
+                    )],
                     stroke: None,
                     shadows: smallvec![],
                 },
@@ -284,10 +284,10 @@ fn synthetic(frames: usize) -> DisplayList {
                             shape: Shape::Ellipse {
                                 size: Vec2::new(30.0, 30.0),
                             },
-                            fills: smallvec![Paint::Radial {
-                                center: Vec2::new(15.0, 15.0),
-                                radius: Vec2::new(15.0, 15.0),
-                                stops: smallvec![
+                            fills: smallvec![Paint::radial(
+                                Vec2::new(15.0, 15.0),
+                                Vec2::new(15.0, 15.0),
+                                smallvec![
                                     GradientStop {
                                         offset: 0.0,
                                         color: Color::WHITE
@@ -297,8 +297,8 @@ fn synthetic(frames: usize) -> DisplayList {
                                         offset: 1.0,
                                         color: Color::BLACK
                                     },
-                                ],
-                            }],
+                                ]
+                            )],
                             stroke: None,
                             shadows: smallvec![],
                         }

@@ -2111,6 +2111,9 @@ impl SceneDocument {
             PropEdit::Paint { stroke, index, op } => {
                 return self.apply_paint_op(k, *stroke, *index, op);
             }
+            PropEdit::ScriptInput { name, value } => {
+                return self.set_script_input(k, name, value);
+            }
             PropEdit::SetEffect(i, prm) => {
                 let mut list = self.schema_effects(k);
                 match list.get_mut(*i) {
@@ -2164,6 +2167,82 @@ impl SceneDocument {
         self.list = Arc::new(self.pipe.list.clone());
         self.revision = next_revision();
         true
+    }
+
+    /// Re-runs script nodes whose file changed on disk (window activation,
+    /// "Reload script"). True if the display list changed.
+    pub fn refresh_scripts(&mut self) -> bool {
+        if !self.pipe.refresh_scripts(&mut self.scene) {
+            return false;
+        }
+        self.list = Arc::new(self.pipe.list.clone());
+        self.revision = next_revision();
+        true
+    }
+
+    /// Writes one `@input` value of script node `k` (one `DocOp` on its
+    /// `inputs`; the other inputs keep their order and values).
+    fn set_script_input(
+        &mut self,
+        k: NodeKey,
+        name: &str,
+        value: &crate::inspector::script::ScriptValue,
+    ) -> bool {
+        let Some(props) = self.props.get(&id_of(k)).and_then(|p| p.script.clone()) else {
+            return false;
+        };
+        let Ok(inputs) = &props.inputs else {
+            return false;
+        };
+        let Some(def) = inputs.iter().find(|i| i.name == name) else {
+            return false;
+        };
+        let Some(id) = self.schema_id(k) else {
+            return false;
+        };
+        let Some(node) = self.scene.schema_node(&id) else {
+            return false;
+        };
+        let mut map = node.inputs.clone().unwrap_or_default();
+        let v = crate::inspector::script::input_scalar(&def.ty, value);
+        if map.get(name) == Some(&v) {
+            return false;
+        }
+        map.insert(name.to_string(), v);
+        self.set(
+            k,
+            ps::Node {
+                inputs: Some(map),
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Color variables of the document, sorted by name, with their color as
+    /// seen by node `k` (its theme). Pen's variable picker lists these.
+    pub fn color_variables(&mut self, k: NodeKey) -> Vec<(String, u32)> {
+        let theme = self.scene.get(k).map(|n| n.theme);
+        let mut names: Vec<String> = self
+            .scene
+            .document()
+            .variables
+            .iter()
+            .flatten()
+            .filter(|(_, v)| v.kind == Some(ps::VarType::Color))
+            .map(|(n, _)| n.clone())
+            .collect();
+        names.sort_by_key(|n| n.to_lowercase());
+        names
+            .into_iter()
+            .map(|n| {
+                let c = self
+                    .scene
+                    .resolve_variable(&n, theme)
+                    .and_then(|v| v.as_color().map(rgba_u32))
+                    .unwrap_or(0x000000ff);
+                (n, c)
+            })
+            .collect()
     }
 
     pub fn set_visible_key(&mut self, k: NodeKey, visible: bool) -> bool {
@@ -2314,6 +2393,29 @@ impl SceneDocument {
             },
             content: t.content.to_string(),
         });
+        if let KindData::Script { uri, inputs } = &n.data {
+            let path = pen_layout::script::resolve_path(self.scene.base_dir(), uri);
+            let src = std::fs::read_to_string(&path)
+                .map_err(|e| format!("Can't read {}: {e}", path.display()));
+            let stored = match self.schema_id(k) {
+                Some(id) => self
+                    .scene
+                    .schema_node(&id)
+                    .and_then(|s| s.inputs.clone())
+                    .unwrap_or_default(),
+                None => Default::default(),
+            };
+            let var = |name: &str| match stored.get(name) {
+                Some(ps::Scalar::Str(v)) => v.var().map(str::to_string),
+                _ => None,
+            };
+            p.script = Some(crate::inspector::script::script_props(
+                uri,
+                src.as_deref().map_err(Clone::clone),
+                &var,
+                inputs,
+            ));
+        }
         Some(p)
     }
 }

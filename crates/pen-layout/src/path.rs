@@ -483,60 +483,13 @@ pub fn ellipse_path(w: f32, h: f32, inner: f32, start_deg: f32, sweep_deg: f32) 
     }
 }
 
-/// Regular polygon with `n` sides stretched to fill `w x h`, first vertex at
-/// the top, optionally with rounded corners.
+/// Regular polygon with `n` sides inscribed in the ellipse of the `w x h`
+/// box, first vertex at the top, corners rounded with circular arcs of
+/// `radius` (Pen's `getEditableContours`: a triangle's base sits at 3/4 of
+/// the height, it is not stretched to the box). Fewer than 3 sides draw
+/// nothing, as in Pen.
 pub fn polygon_path(w: f32, h: f32, n: u32, radius: f32) -> Path {
-    let n = n.max(3) as usize;
-    let raw: Vec<Vec2> = (0..n)
-        .map(|i| {
-            let a = -FRAC_PI_2 + i as f32 * TAU / n as f32;
-            Vec2::new(a.cos(), a.sin())
-        })
-        .collect();
-    let (mut min, mut max) = (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY));
-    for p in &raw {
-        min = min.min(*p);
-        max = max.max(*p);
-    }
-    let span = (max - min).max(Vec2::splat(1e-6));
-    let pts: Vec<Vec2> = raw
-        .iter()
-        .map(|p| (*p - min) / span * Vec2::new(w, h))
-        .collect();
-    let mut els = Vec::with_capacity(n * 2 + 2);
-    if radius <= 0.0 {
-        els.push(PathEl::MoveTo(pts[0]));
-        for p in &pts[1..] {
-            els.push(PathEl::LineTo(*p));
-        }
-        els.push(PathEl::Close);
-    } else {
-        let corner = |i: usize| {
-            let v = pts[i];
-            let prev = pts[(i + n - 1) % n];
-            let next = pts[(i + 1) % n];
-            let cut = radius
-                .min((prev - v).length() * 0.5)
-                .min((next - v).length() * 0.5);
-            (
-                v + (prev - v).normalize_or_zero() * cut,
-                v,
-                v + (next - v).normalize_or_zero() * cut,
-            )
-        };
-        let (_, _, b0) = corner(0);
-        els.push(PathEl::MoveTo(b0));
-        for i in 1..=n {
-            let (a, v, b) = corner(i % n);
-            els.push(PathEl::LineTo(a));
-            els.push(PathEl::QuadTo(v, b));
-        }
-        els.push(PathEl::Close);
-    }
-    Path {
-        els,
-        fill_rule: FillRule::NonZero,
-    }
+    crate::vector_shapes::polygon(w, h, n, radius).to_path()
 }
 
 #[cfg(test)]
@@ -579,10 +532,15 @@ mod tests {
         let b = path_bounds(&pie.els);
         // Quarter from +x going up (counter-clockwise).
         assert!((b[1]).abs() < 1e-3 && (b[3] - 5.0).abs() < 1e-3, "{b:?}");
+        // Pen: vertices on the box's inscribed ellipse (base at 3/4 height).
         let tri = polygon_path(10.0, 10.0, 3, 0.0);
         let b = path_bounds(&tri.els);
-        assert!((b[2] - 10.0).abs() < 1e-4 && (b[3] - 10.0).abs() < 1e-4);
+        assert!(
+            (b[1] - 0.0).abs() < 1e-4 && (b[3] - 7.5).abs() < 1e-4,
+            "{b:?}"
+        );
         let r = polygon_path(10.0, 10.0, 6, 2.0);
-        assert!(r.els.iter().any(|e| matches!(e, PathEl::QuadTo(..))));
+        assert!(r.els.iter().any(|e| matches!(e, PathEl::CubicTo(..))));
+        assert!(polygon_path(10.0, 10.0, 2, 0.0).els.is_empty());
     }
 }

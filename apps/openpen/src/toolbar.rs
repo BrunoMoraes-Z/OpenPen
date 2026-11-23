@@ -172,6 +172,11 @@ pub fn render_toolbar(
             ),
         };
     }
+    // Vector edit mode: Pen's path sub-tools beside the tool column.
+    let tools = div()
+        .relative()
+        .child(tools)
+        .when(s.path_mode, |d| d.child(path_toolbar(state, &p, cx)));
     div()
         .flex()
         .flex_col()
@@ -212,6 +217,65 @@ pub fn render_toolbar(
             ),
         )
         .into_any_element()
+}
+
+/// Path sub-toolbar of vector edit mode (Pen: Pen P, Select points V,
+/// Cut X, a separator and Done ↵), to the right of the tool column.
+fn path_toolbar(state: &Entity<EditorState>, p: &Palette, cx: &App) -> impl IntoElement {
+    let s = state.read(cx);
+    let current = match (s.tool, s.path_cut) {
+        (Tool::Pen, _) => 0,
+        (_, true) => 2,
+        _ => 1,
+    };
+    let mut bar = island(p)
+        .id("path-tools")
+        .occlude()
+        .absolute()
+        .top_0()
+        .left(relative(1.))
+        .ml(px(6.))
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(px(4.))
+        .p(px(4.));
+    for (i, (label, key, icon)) in [
+        ("Pen", "P", IconName::PenTool),
+        ("Select points", "V", IconName::MousePointer2),
+        ("Cut", "X", IconName::Scissors),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let st = state.clone();
+        bar = bar.child(
+            button_base(format!("path-tool-{i}").into(), i == current, p)
+                .size(px(28.))
+                .child(Icon::new(icon).size(px(16.)))
+                .tooltip(move |w, cx| Tooltip::new(format!("{label}  {key}")).build(w, cx))
+                .on_click(move |_, _, cx| {
+                    st.update(cx, |s, cx| {
+                        s.set_tool(if i == 0 { Tool::Pen } else { Tool::Move }, cx);
+                        s.path_cut = i == 2;
+                        cx.notify();
+                    })
+                }),
+        );
+    }
+    let st = state.clone();
+    bar.child(div().h_px().w(px(16.)).bg(p.border)).child(
+        button_base("path-done".into(), false, p)
+            .size(px(28.))
+            .child(Icon::new(IconName::X).size(px(16.)))
+            .tooltip(|w, cx| Tooltip::new("Done  ↵").build(w, cx))
+            .on_click(move |_, _, cx| {
+                st.update(cx, |s, cx| {
+                    s.path_done_requested = true;
+                    cx.notify();
+                })
+            }),
+    )
 }
 
 pub fn render_zoom_control(state: &Entity<EditorState>, cx: &App) -> AnyElement {

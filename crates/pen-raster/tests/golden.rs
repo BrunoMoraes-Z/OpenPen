@@ -342,13 +342,48 @@ fn g06_radial_gradient_elliptical() {
             size: Vec2::new(88.0, 56.0),
             radii: CornerRadii::default(),
         },
-        vec![Paint::Radial {
-            center: Vec2::new(44.0, 28.0),
-            radius: Vec2::new(44.0, 20.0),
-            stops: stops2(rgb(255, 255, 255), rgb(0, 80, 160)),
-        }],
+        vec![Paint::radial(
+            Vec2::new(44.0, 28.0),
+            Vec2::new(44.0, 20.0),
+            stops2(rgb(255, 255, 255), rgb(0, 80, 160)),
+        )],
     )]);
     check("06_radial_gradient", &l, VIEW, 1.0, BG);
+}
+
+#[test]
+fn g25_radial_gradient_rotated() {
+    // A rotated ellipse (perpendicular axes) and a sheared one (Pen's radial in a
+    // non-square box with a rotation).
+    let d = Vec2::new(0.8, -0.6);
+    let l = list(vec![
+        shape_item(
+            at(2.0, 4.0),
+            Shape::Rect {
+                size: Vec2::new(44.0, 56.0),
+                radii: CornerRadii::default(),
+            },
+            vec![Paint::Radial {
+                center: Vec2::new(22.0, 28.0),
+                axis_x: d * 24.0,
+                axis_y: d.perp() * 8.0,
+                stops: stops2(rgb(255, 255, 255), rgb(0, 80, 160)),
+            }],
+        ),
+        shape_item(
+            at(50.0, 4.0),
+            Shape::Ellipse {
+                size: Vec2::new(44.0, 56.0),
+            },
+            vec![Paint::Radial {
+                center: Vec2::new(16.0, 24.0),
+                axis_x: Vec2::new(20.0, 14.0),
+                axis_y: Vec2::new(-4.0, 18.0),
+                stops: stops2(rgb(255, 230, 0), rgb(200, 30, 60)),
+            }],
+        ),
+    ]);
+    check("25_radial_rotated", &l, VIEW, 1.0, BG);
 }
 
 #[test]
@@ -399,11 +434,11 @@ fn g08_multiple_fills() {
                 end: Vec2::new(0.0, 48.0),
                 stops: stops2(rgba(255, 255, 255, 0.0), rgba(255, 120, 200, 0.9)),
             },
-            Paint::Radial {
-                center: Vec2::new(20.0, 14.0),
-                radius: Vec2::new(16.0, 16.0),
-                stops: stops2(rgba(255, 255, 0, 0.8), rgba(255, 255, 0, 0.0)),
-            },
+            Paint::radial(
+                Vec2::new(20.0, 14.0),
+                Vec2::new(16.0, 16.0),
+                stops2(rgba(255, 255, 0, 0.8), rgba(255, 255, 0, 0.0)),
+            ),
         ],
     )]);
     check("08_multiple_fills", &l, VIEW, 1.0, BG);

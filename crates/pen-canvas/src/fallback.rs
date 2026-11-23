@@ -1468,14 +1468,14 @@ mod tests {
         } = &mut star
         {
             *transform = Affine2::from_angle(0.5);
-            fills[0] = Paint::Radial {
-                center: Vec2::ZERO,
-                radius: Vec2::ONE,
-                stops: smallvec![GradientStop {
+            fills[0] = Paint::radial(
+                Vec2::ZERO,
+                Vec2::ONE,
+                smallvec![GradientStop {
                     offset: 0.0,
                     color: Color::BLACK
                 }],
-            };
+            );
         }
         assert_eq!(item_reason(&star), Some(FallbackReason::ShapeEffect));
         // the same radial on an axis-aligned rect is a native texture

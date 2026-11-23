@@ -78,6 +78,44 @@ mesmo `update`. Consequências:
 - o arquivo é relido quando muda (mtime/tamanho, verificado só para scripts afetados);
   `Pipeline::refresh_scripts` reverifica todos (ex.: ao voltar o foco do app).
 
+### Inputs no inspector
+
+Com um nó `script` selecionado, o inspector mostra a seção **Script**, como a do Pen
+(`properties.script.*` no bundle): o caminho do arquivo, uma linha por `@input` do cabeçalho
+(rótulo de 80 px + editor) e o botão "Reload script" (ícone de recarregar no título).
+
+| Tipo | Editor (igual ao Pen) | Gravado em `inputs` |
+|---|---|---|
+| `number(min, max)` | campo numérico com `#` para arrastar (passo 0,1; Shift ×10), aceita expressões; valor limitado a `min`/`max` | número |
+| `color` | swatch + hex; abre o seletor de cor do inspector | `"#RRGGBB"` / `"#RRGGBBAA"` |
+| `boolean` | checkbox | `true`/`false` |
+| `enum("a", "b")` | select com as opções | a string |
+| `string` | campo de texto | a string |
+| `ref` | campo de texto com o id (o Pen abre um seletor de componentes) | a string |
+
+- O valor mostrado é o que o script recebe: o guardado no nó (variáveis resolvidas) ou o default
+  do cabeçalho; números já limitados. Um valor ligado a variável mostra o chip; editar troca a
+  ligação pelo valor.
+- Cada edição grava o mapa `inputs` inteiro num `DocOp` (um passo de undo; um arrasto do `#` é um
+  passo). A ordem e os outros inputs ficam, e só o input editado muda. O script roda de novo pelo
+  caminho normal (a chave do cache inclui os inputs).
+- Erro no cabeçalho (ou arquivo ausente) aparece em vermelho no lugar das linhas.
+- "Reload script" chama `Pipeline::refresh_scripts` (via `SceneDocument::refresh_scripts`) e relê o
+  cabeçalho. O mesmo acontece quando a janela volta a ficar ativa (o gancho de
+  `observe_window_activation` das imagens chama `EditorState::reload_changed_assets`, que agora
+  também atualiza os scripts): editar o `.js` em outro programa e voltar atualiza a saída e os
+  inputs.
+- Modelo puro em `apps/openpen/src/inspector/script.rs` (`script_props`, `input_scalar`,
+  `parse_number`); UI em `inspector/panel/script_ui.rs`; escrita em
+  `SceneDocument::set_script_input`.
+- Difere do Pen: inputs `number` com faixa usam campo, não slider (no Pen o slider é dos uniforms
+  de shader; o de script é campo). O campo de caminho é só leitura (o Pen permite trocar e
+  importar o arquivo) e "Convert to layers" ainda não existe.
+
+Capturas: `docs/screenshots/fix-script-inputs.png` (9 barras, `layout` = rows, `rounded`
+desligado, cor escolhida no seletor) e `fix-script-reload.png` (input `gap` novo depois de editar
+o `.js` e clicar em "Reload script").
+
 O `ScriptNodeRunner` (pen-script) guarda até 16 scripts compilados (um runtime/contexto QuickJS
 cada, função de wrapper como global): re-executar com outro tamanho é só uma chamada.
 
@@ -196,7 +234,7 @@ pela CLI).
   em escala grande a imagem fica suavizada.
 - Sem derivadas (`dFdx` = 0) nem LOD implícito.
 - Scripts rodam no thread do `update` (bloqueia até 2 s no pior caso); a saída gerada não é
-  clicável fora do retângulo do script; não há UI no inspector para os `@input` (os valores do
-  arquivo são passados) nem a ação "Convert to layers".
+  clicável fora do retângulo do script; a ação "Convert to layers" e o seletor de componentes do
+  input `ref` não existem; o caminho do script não é editável no inspector.
 - O corpus `testdata/` não tem nós `script` nem shaders; o teste de corpus só confirma que nada
   quebra.

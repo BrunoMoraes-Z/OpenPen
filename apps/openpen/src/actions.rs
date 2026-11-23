@@ -97,6 +97,9 @@ gpui_kit::actions!(
         ToolComment,
         ToolScale,
         ToolEyedropper,
+        // Vector edit mode
+        PathCutTool,
+        JoinPoints,
     ]
 );
 
@@ -199,6 +202,9 @@ pub fn shortcuts() -> Vec<Shortcut> {
         sc!("shift-2", c, ZoomToSelection),
         sc!("secondary-'", c, TogglePixelGrid),
         sc!("secondary-shift-'", c, ToggleSnapPixelGrid),
+        // Vector edit mode (Pen's path sub-tools; ignored outside it)
+        sc!("x", c, PathCutTool),
+        sc!("secondary-j", c, JoinPoints),
     ];
     for tool in Tool::ALL {
         for &keys in tool.shortcuts() {

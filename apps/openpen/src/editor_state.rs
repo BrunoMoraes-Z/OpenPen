@@ -61,6 +61,13 @@ pub struct EditorState {
     pub fill_handle_drag: bool,
     /// A task polls background image decodes (see [`Self::watch_assets`]).
     assets_watch: bool,
+    /// Vector edit mode is on (the toolbar shows the path sub-tools).
+    pub path_mode: bool,
+    /// Path sub-tool "Cut" (X): with [`Tool::Move`], clicks cut the path.
+    /// Any tool change clears it.
+    pub path_cut: bool,
+    /// One-shot request from the path sub-toolbar's "Done".
+    pub path_done_requested: bool,
 }
 
 /// Where a context menu was requested.
@@ -106,6 +113,9 @@ impl EditorState {
             fill_edit: None,
             fill_handle_drag: false,
             assets_watch: false,
+            path_mode: false,
+            path_cut: false,
+            path_done_requested: false,
         };
         s.reset_tree();
         s
@@ -323,6 +333,10 @@ impl EditorState {
     }
 
     pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
+        if self.path_cut {
+            self.path_cut = false;
+            cx.notify();
+        }
         if self.tool != tool {
             self.tool = tool;
             if let Some(g) = crate::toolbar::group_of(tool) {
@@ -389,12 +403,21 @@ impl EditorState {
         .detach();
     }
 
-    /// Picks up image files changed on disk (window activation).
+    /// Picks up image and script files changed on disk (window activation).
     pub fn reload_changed_assets(&mut self, cx: &mut Context<Self>) {
         if self.doc.reload_changed_assets() {
             cx.notify();
             self.watch_assets(cx);
         }
+        self.reload_scripts(cx);
+    }
+
+    /// Re-runs scripts whose file changed and re-reads the selected script's
+    /// header (the inspector's "Reload script").
+    pub fn reload_scripts(&mut self, cx: &mut Context<Self>) {
+        self.doc.refresh_scripts();
+        self.doc.refresh_props(&self.selection);
+        cx.notify();
     }
 
     /// Opens an undo block spanning several `changed` calls (a drag).

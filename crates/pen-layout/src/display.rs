@@ -1086,17 +1086,18 @@ impl DisplayListBuilder {
                         }
                     }
                     GradientKind::Radial => {
-                        // `size[1]` lies along the rotation (0 = up) and
-                        // `size[0]` across it. The paint has no rotation:
-                        // turned mostly sideways, the two radii swap.
-                        let [mut rx, mut ry] = g.size;
-                        if rot.sin().abs() > rot.cos().abs() {
-                            std::mem::swap(&mut rx, &mut ry);
-                        }
+                        // As in Pen: the ellipse is built in the normalized box (radius
+                        // `size[1] / 2` along the rotation, 0 = up, counter-clockwise, and
+                        // `size[0] / 2` across it), then scaled by the node size. With a
+                        // non-square box and a rotation, the axes are not perpendicular.
+                        // A negative width (Pen keeps it) mirrors the axis.
+                        let (sin, cos) = rot.sin_cos();
+                        let half = |v: f32| if v == 0.0 { 1e-6 } else { v * 0.5 };
+                        let (rx, ry) = (half(g.size[0]), half(g.size[1]));
                         Paint::Radial {
                             center: c,
-                            radius: Vec2::new(rx * size.x * 0.5, ry * size.y * 0.5)
-                                .max(Vec2::splat(1e-3)),
+                            axis_x: Vec2::new(cos, -sin) * rx * size,
+                            axis_y: Vec2::new(-sin, -cos) * ry * size,
                             stops,
                         }
                     }

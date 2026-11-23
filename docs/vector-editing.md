@@ -10,9 +10,11 @@ copiado; os números (tamanhos, raios, limiares) foram conferidos lá.
 
 | Parte | Arquivo | Papel |
 |---|---|---|
-| Geometria pura | `crates/pen-layout/src/vector.rs` | Modelo de contornos/âncoras/handles, parse e escrita de SVG `d`, bounds, hit test de âncoras/handles/segmentos, divisão de Bézier, apagar pontos, alternar canto/suave, restrição de 45°. Sem GPUI. |
+| Geometria pura | `crates/pen-layout/src/vector.rs` | Modelo de contornos/âncoras/handles, parse e escrita de SVG `d`, bounds, hit test de âncoras/handles/segmentos, divisão de Bézier, apagar pontos, alternar canto/suave, restrição de 45°, cortar (`cut_at`) e unir (`join_anchors`). Sem GPUI. |
+| Formas como path | `crates/pen-layout/src/vector_shapes.rs` | Contornos editáveis de retângulo, elipse/anel/arco, polígono e linha, como o `getEditableContours` do Pen. O renderer usa o mesmo polígono. |
 | Parser SVG | `crates/pen-layout/src/path.rs` | `parse_els` (crate-interno) devolve os elementos e se a entrada foi lida inteira; `parse_svg_path` continua igual para o renderer. |
-| Sessão de edição | `apps/openpen/src/canvas_host/vector.rs` | Submódulo do `CanvasHost`: estado da sessão, gestos, escrita no documento (`write_path`, `create_path`), atalhos e desenho do overlay. |
+| Sessão de edição | `apps/openpen/src/canvas_host/vector.rs` | Submódulo do `CanvasHost`: estado da sessão, gestos, escrita no documento (`write_path`, `create_path`, `convert_to_path`), atalhos (Esc, X, Ctrl+J) e desenho do overlay. |
+| Sub-toolbar | `apps/openpen/src/toolbar.rs` (`path_toolbar`) | Pen / Select points / Cut / Done ao lado da coluna de ferramentas; estado em `EditorState::path_mode`, `path_cut`, `path_done_requested`. |
 | Ganchos | `apps/openpen/src/canvas_host.rs` | `Gesture::Vector`, chamadas em mouse down/move/up/hover, overlay, ações de teclado interceptadas e o conserto do mouse-up perdido (§6). |
 
 ## 2. Formato gravado (igual ao Pen)
@@ -61,11 +63,15 @@ confere que o desenho é o mesmo.
 | Ctrl durante o arrasto | Volta à simetria. |
 | Shift | Restringe o ponto a múltiplos de 45° a partir do ponto anterior (também ao puxar handles). |
 | Clique no primeiro ponto | Fecha o contorno; arrastar a partir dele ajusta a curva de fechamento. |
-| Enter / Esc | Termina o path e sai do modo (o path fica selecionado, ferramenta volta a Move). |
+| Enter | Termina o path e sai do modo (o path fica selecionado, ferramenta volta a Move). |
+| Esc | Para de desenhar e **continua no modo** com a pen (contornos de um ponto só somem). Os Esc seguintes, como no Pen: limpam a seleção de pontos, trocam a pen por Select points, saem do modo. |
 | Ctrl+Z com só um ponto | Descarta o ponto. Depois disso cada ponto é um passo de undo. |
-| Clique num segmento (sem desenhar) | Insere um ponto ali, sem mudar a forma. |
+| **Alt**+clique num segmento (sem desenhar) | Insere um ponto ali, sem mudar a forma. O segmento só acende sob o cursor com Alt. |
+| Clique num segmento, sem Alt | Começa um novo contorno a partir daquele ponto do segmento (Pen: `StartContour`). |
 | Clique numa ponta de contorno aberto | Continua o contorno a partir dela. |
+| Clique numa âncora do meio | Começa um novo contorno na posição dela; com Alt, move a âncora. |
 | Clique no vazio (editando um path) | Começa um novo contorno no mesmo path (como no Pen). |
+| P com um path/forma selecionado | Entra no modo de edição já com a pen (Pen: `onToolChange` para `pen`). |
 
 **Snapping**: o ponto encosta (8 px de tela, como no Pen) nas outras âncoras do path e nas
 bordas/centros dos irmãos e do pai, com guias vermelhas. Ctrl desliga. Eixos sem snap são
@@ -77,9 +83,26 @@ handle de saída, se houver), com um ponto-guia branco de 8 px no destino.
 
 ## 4. Modo de edição de pontos
 
-Entrada: duplo clique num `path` (selecionado, ou sem outra seleção) ou Enter com um único
-`path` selecionado. P e V alternam entre a pen e a seleção de pontos dentro do modo; outra
-ferramenta, Enter, ou Esc sem pontos selecionados saem. Duplo clique no vazio também sai.
+Entrada: duplo clique num `path`, `rectangle`, `ellipse`, `polygon` ou `line` (selecionado, ou
+sem outra seleção) ou Enter com um único deles selecionado. Um retângulo com fill de imagem não
+entra (no Pen, ele abre o crop da imagem, que o OpenPen não tem).
+
+**Formas viram path na primeira edição** (como o `write` do modelo do Pen, com
+`changeShapeType`): os contornos são os do Pen (`vector_shapes`: cantos arredondados com handles
+de 0,5523 do raio e raios ajustados como no CSS; elipse começando no topo, anel com o contorno
+interno invertido, arco/pizza com o centro; polígono com os vértices na elipse inscrita e cantos
+em arcos circulares; linha de (0,0) a (w,h)), no espaço local do nó. Na primeira gravação o nó
+é trocado por um `path` com o mesmo `id`, posição na árvore, paints e campos desconhecidos; os
+campos que um `path` não tem (`cornerRadius`, `polygonCount`, `innerRadius`…) saem, e a caixa
+passa a ser os bounds justos da geometria (um triângulo de 120×120 fica com 103,9×90). Troca +
+edição são **um** passo de undo (Delete + Insert + `SetFields` no mesmo bloco). Entrar e sair
+sem mexer não muda o nó.
+
+**Sub-toolbar** (Pen: `tools-panel` à direita da coluna de ferramentas): Pen (P), Select points
+(V), Cut (X), um separador e Done (↵, ícone X). Botões de 28 px, o ativo com borda.
+
+P e V alternam entre a pen e a seleção de pontos dentro do modo; X liga o corte. Outra
+ferramenta, Enter ou Done saem. Duplo clique no vazio também sai.
 
 | Gesto (seleção de pontos, V) | Efeito |
 |---|---|
@@ -93,7 +116,14 @@ ferramenta, Enter, ou Esc sem pontos selecionados saem. Duplo clique no vazio ta
 | Delete / Backspace | Apaga os pontos selecionados; os vizinhos continuam ligados. Contornos sem desenho somem; se nada sobrar, o nó é apagado. |
 | Ctrl+A | Seleciona todos os pontos. |
 | Setas (Shift = 10) | Movem os pontos selecionados. |
+| Ctrl+J | Une os pontos selecionados, em pares, na ordem (Pen: `joinSelectedPoints`): as duas pontas de um contorno aberto o fecham; pontas de contornos diferentes viram um contorno só, com segmento reto (os handles das pontas unidas somem); uma âncora do meio começa um contorno novo na posição dela. Pares já ligados são ignorados. Só na seleção de pontos. |
 | Esc | Limpa a seleção de pontos; com ela vazia, sai do modo. |
+
+| Gesto (Cut, X) | Efeito |
+|---|---|
+| Clique numa âncora | Corta ali: um contorno fechado abre (a âncora vira as duas pontas); um aberto se divide em dois. Pontas de contorno aberto não cortam. |
+| Clique num segmento | Insere um ponto no lugar exato e corta nele. Um ponto azul de 7 px mostra onde. |
+| Depois do corte | Volta para Select points, como no Pen. Um passo de undo. |
 
 Shift ao arrastar pontos trava o eixo dominante. Os pontos movidos fazem snap nas outras
 âncoras e nos irmãos.
@@ -125,7 +155,12 @@ Handles aparecem nos pontos selecionados, nos vizinhos deles e no ponto que est�
 estendido. No modo, a caixa de seleção, os handles de resize e o rótulo de tamanho somem
 (no Pen, `hidesSelectionOutline`).
 
-Capturas: `docs/screenshots/pen-tool-*.png`.
+Capturas: `docs/screenshots/pen-tool-*.png` e, desta rodada, `fix-vector-subtoolbar.png`
+(retângulo no modo, com a sub-toolbar), `fix-vector-shape-converted.png` (canto arrastado: virou
+path, sem campo de raio), `fix-vector-esc-stops-drawing.png` (Esc parou o desenho, a pen continua
+ativa), `fix-vector-join.png` (pontas selecionadas e unidas com Ctrl+J), `fix-vector-cut.png`
+(elipse cortada com X e a ponta arrastada), `fix-vector-alt-insert.png` (Alt+clique com a pen) e
+`fix-vector-polygon.png` (P com o triângulo selecionado; contorno igual ao desenho).
 
 ## 6. Conserto: marquee preso com down + up no mesmo frame
 
@@ -136,14 +171,28 @@ registra, a cada frame, um ouvinte de mouse-up na janela que encerra qualquer ge
 (`CanvasHost::gesture_active` + `on_up`). Como `on_up` troca o gesto por `None`, uma segunda
 chamada no mesmo evento (o capture, quando já existe) não faz nada.
 
-## 7. Lacunas
+## 7. Polígonos no renderer (correção)
 
-- Só nós `path` entram no modo. O Pen também converte retângulo, elipse, polígono e linha em
-  path ao editar os pontos.
-- Faltam a sub-toolbar do modo (Pen / Select points / Cut / Done), a ferramenta Cut (X),
-  Ctrl+J (unir pontos), curvar segmento com Ctrl+arrasto, seleção de segmentos e handles
-  como entidades próprias, resize/rotação da seleção de pontos, copiar/colar pontos e a seção
-  Vector do inspector.
+O `polygon_path` do pen-layout esticava o polígono até ocupar a caixa. O Pen desenha o polígono
+com os mesmos contornos da edição (`getEditableContours` no `getFillPath`): vértices na elipse
+inscrita, primeiro no topo. Um triângulo numa caixa de 120×120 tem a base a 3/4 da altura, não
+na borda de baixo. Agora o renderer usa `vector_shapes::polygon`, e os cantos arredondados são
+arcos circulares como no Pen. Com menos de 3 lados nada é desenhado (Pen).
+
+Testes: `vector::tests::cut_opens_or_splits_like_pen` e `join_like_pen` (pen-layout),
+`vector_shapes::tests` (contornos das formas), `path::tests::fit_and_shapes` (polígono do
+renderer) e `canvas_host::vector::tests::shapes_become_paths_like_pen` (retângulo girado com
+raio vira path no mesmo lugar, campos desconhecidos mantidos, undo em um passo; triângulo com a
+caixa justa).
+
+## 8. Lacunas
+
+- Uma sessão edita um nó só (o Pen edita vários paths de uma vez com Enter/P).
+- Curvar segmento com Ctrl+arrasto, puxar handles com Ctrl+clique numa âncora, seleção de
+  segmentos e handles como entidades próprias, resize/rotação da seleção de pontos,
+  copiar/colar e duplicar (Ctrl+D) pontos, e a seção Vector do inspector ainda faltam.
+- O Cut não muda o cursor e o clique da sub-toolbar em Cut não limpa a seleção de pontos (o X
+  limpa).
 - O cursor da pen é a cruz padrão (o Pen tem cursores próprios).
 - Path dentro de auto layout: `x`/`y` não podem mudar, então a geometria pode deslocar o
   desenho quando os bounds mudam.

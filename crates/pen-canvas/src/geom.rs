@@ -565,10 +565,16 @@ pub fn gradient_t(paint: &Paint, p: Vec2) -> f32 {
                 (p - *start).dot(d) / l2
             }
         }
-        Paint::Radial { center, radius, .. } => {
-            let r = radius.max(Vec2::splat(1e-6));
-            ((p - *center) / r).length()
-        }
+        Paint::Radial {
+            center,
+            axis_x,
+            axis_y,
+            ..
+        } => match pen_render::radial_to_unit(*center, *axis_x, *axis_y) {
+            Some(m) => m.transform_point2(p).length(),
+            // Collapsed ellipse: everything is past the last stop.
+            None => 1.0,
+        },
         Paint::Angular {
             center,
             start_angle,
@@ -934,12 +940,23 @@ mod tests {
         assert_eq!(sample_stops(&stops, 0.5), Color::WHITE);
         assert!((sample_stops(&stops, 0.25).r - 0.5).abs() < 1e-5);
         assert!((average_stop_color(&stops).r - 0.5).abs() < 0.05);
-        let radial = Paint::Radial {
-            center: Vec2::splat(5.0),
-            radius: Vec2::splat(5.0),
+        let radial = Paint::radial(
+            Vec2::splat(5.0),
+            Vec2::splat(5.0),
+            stops.iter().copied().collect(),
+        );
+        assert!((gradient_t(&radial, Vec2::new(10.0, 5.0)) - 1.0).abs() < 1e-5);
+        // Rotated ellipse: the long axis points along the diagonal.
+        let d = Vec2::new(1.0, 1.0).normalize();
+        let rotated = Paint::Radial {
+            center: Vec2::ZERO,
+            axis_x: d * 10.0,
+            axis_y: d.perp() * 2.0,
             stops: stops.iter().copied().collect(),
         };
-        assert!((gradient_t(&radial, Vec2::new(10.0, 5.0)) - 1.0).abs() < 1e-5);
+        assert!((gradient_t(&rotated, d * 10.0) - 1.0).abs() < 1e-5);
+        assert!((gradient_t(&rotated, d.perp() * 2.0) - 1.0).abs() < 1e-5);
+        assert!((gradient_t(&rotated, Vec2::new(10.0, 0.0)) - 1.0).abs() > 0.5);
         let tex = gradient_texture(
             &radial,
             &Rect::new(0.0, 0.0, 10.0, 10.0),
