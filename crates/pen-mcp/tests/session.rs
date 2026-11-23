@@ -408,3 +408,110 @@ async fn tool_use_id_from_request_meta_reaches_ctx() {
         .collect();
     assert_eq!(ids, vec![Some("toolu_01ABC".to_string()), None]);
 }
+
+#[tokio::test]
+async fn import_website_routes_to_the_backend() {
+    let (client, backend, _server) = start(McpOptions::default()).await;
+    let tools = client.list_all_tools().await.unwrap();
+    let t = tools.iter().find(|t| t.name == "import_website").unwrap();
+    assert_eq!(t.input_schema["required"], json!(["url"]));
+    assert_eq!(
+        t.annotations.as_ref().and_then(|a| a.open_world_hint),
+        Some(true)
+    );
+
+    let r = call(
+        &client,
+        "import_website",
+        json!({"url": " example.com ", "width": 390, "fullPage": false}),
+    )
+    .await
+    .unwrap();
+    assert_ne!(r.is_error, Some(true));
+    assert!(text(&r).contains("`web1`"), "{}", text(&r));
+    assert!(text(&r).contains("1 image could not be downloaded"));
+    let img = r
+        .content
+        .iter()
+        .find_map(|c| c.as_image())
+        .expect("screenshot");
+    assert_eq!(img.mime_type, "image/png");
+    let ev = backend
+        .events()
+        .into_iter()
+        .find_map(|e| match e {
+            Event::Import(_, a, url) => Some((a, url)),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(ev.1, "https://example.com/");
+    assert_eq!((ev.0.width, ev.0.full_page), (Some(390), Some(false)));
+
+    // A backend failure is a tool error the model reads.
+    let r = call(
+        &client,
+        "import_website",
+        json!({"url": "unreachable.example"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.is_error, Some(true));
+    assert!(text(&r).contains("navigation failed"));
+
+    // Bad arguments never reach the backend.
+    let before = backend.events().len();
+    for bad in [
+        json!({"url": "ftp://example.com"}),
+        json!({"url": "example.com", "width": 5}),
+        json!({}),
+    ] {
+        let e = call(&client, "import_website", bad).await.unwrap_err();
+        assert_eq!(error_code(e), -32602);
+    }
+    assert_eq!(backend.events().len(), before);
+    client.cancel().await.unwrap();
+}
+
+/// Backends that do not implement the tool answer with a readable error.
+#[tokio::test]
+async fn import_website_default_is_not_supported() {
+    struct Bare;
+    impl ToolBackend for Bare {
+        fn get_app_state(
+            &self,
+            _: pen_mcp::CallCtx,
+            _: Option<String>,
+        ) -> pen_mcp::BoxFuture<'static, pen_mcp::ToolResult> {
+            Box::pin(async { Ok(pen_mcp::ToolOutput::text("")) })
+        }
+        fn execute(
+            &self,
+            _: pen_mcp::CallCtx,
+            _: pen_mcp::ExecuteArgs,
+        ) -> pen_mcp::BoxFuture<'static, pen_mcp::ToolResult> {
+            Box::pin(async { Ok(pen_mcp::ToolOutput::text("")) })
+        }
+        fn save(
+            &self,
+            _: pen_mcp::CallCtx,
+            _: Option<String>,
+        ) -> pen_mcp::BoxFuture<'static, pen_mcp::ToolResult> {
+            Box::pin(async { Ok(pen_mcp::ToolOutput::text("")) })
+        }
+    }
+    let (client_io, server_io) = tokio::io::duplex(1 << 16);
+    let (sr, sw) = tokio::io::split(server_io);
+    tokio::spawn(async move {
+        let _ = pen_mcp::serve_io(Arc::new(Bare), McpOptions::default(), "bare", sr, sw).await;
+    });
+    let client = ClientConfig::new(ClientCapabilities::default(), Implementation::new("t", "1"))
+        .serve(client_io)
+        .await
+        .unwrap();
+    let r = call(&client, "import_website", json!({"url": "example.com"}))
+        .await
+        .unwrap();
+    assert_eq!(r.is_error, Some(true));
+    assert!(text(&r).contains("cannot import"));
+    client.cancel().await.unwrap();
+}

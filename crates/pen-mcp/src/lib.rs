@@ -32,7 +32,7 @@ pub use backend::{
 pub use futures::future::BoxFuture;
 pub use server::INSTRUCTIONS;
 pub use skills::{SkillStore, find_skills_dir};
-pub use tools::{CodeEdit, ExecuteArgs};
+pub use tools::{CodeEdit, ExecuteArgs, ImportWebsiteArgs, ImportedPage, normalize_web_url};
 
 use server::{OpenPenServer, Session, Shared};
 

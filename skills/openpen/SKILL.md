@@ -42,6 +42,24 @@ JavaScript snippets to the `execute` tool. Before your first edit, read:
 - Repeated UI (rows, cards, nav items) comes from a component or a JavaScript loop, not from
   copy-pasted literals.
 
+## Starting from a live web page
+
+`import_website {url, width?, height?, fullPage?, selector?}` loads a page in a private
+headless browser and adds it as **one new top-level frame** placed in free space, as a single
+undo step. Reach for it when the user wants to recreate, restyle or redesign an existing site,
+or names a page as the reference to start from. Do not use it for pages that need a login.
+
+- It is slow (10 to 90 s): call it once per page and viewport. Use `width: 390` for a phone
+  layout, `fullPage: false` for the first screen only, and `selector` (e.g. `"main"`) to take
+  one part of a long page.
+- The document must be saved: images and fonts land in files next to the `.pen`.
+- The result is a faithful but flat copy: absolutely positioned frames, text and image layers
+  named after their HTML tags. Expect to refine it (rename layers, group sections, convert them
+  to flex layout, swap in variables and components) rather than to keep it as is.
+- Afterwards, inspect it with `Get` on the returned frame id (with a `depth` limit or a compact
+  visitor; imported pages are large) and `TakeScreenshot` of the frame. Compare with the original
+  screenshot the tool returns, then edit.
+
 ## Headless sessions
 
 When `get_app_state` says "Headless mode", no editor window is open and nobody sees the canvas:

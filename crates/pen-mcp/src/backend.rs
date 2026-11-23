@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use futures::future::BoxFuture;
 
-use crate::tools::ExecuteArgs;
+use crate::tools::{ExecuteArgs, ImportWebsiteArgs};
 
 /// Who is calling: one MCP session (one socket connection or one stdio server).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -98,6 +98,21 @@ pub trait ToolBackend: Send + Sync + 'static {
 
     /// Writes the document to disk.
     fn save(&self, ctx: CallCtx, uri: Option<String>) -> BoxFuture<'static, ToolResult>;
+
+    /// Imports a web page as a new top-level frame (`import_website`).
+    /// `url` is already normalized ([`crate::tools::normalize_web_url`]).
+    /// The default answers that the backend cannot do it.
+    fn import_website(
+        &self,
+        ctx: CallCtx,
+        args: ImportWebsiteArgs,
+        url: String,
+    ) -> BoxFuture<'static, ToolResult> {
+        let _ = (ctx, args, url);
+        Box::pin(std::future::ready(Err(ToolError::Failed(
+            "This OpenPen server cannot import web pages.".into(),
+        ))))
+    }
 
     /// A tool this crate does not know (not listed in `tools/list`), e.g. an
     /// app's debug hook. `None` (the default) answers "unknown tool".

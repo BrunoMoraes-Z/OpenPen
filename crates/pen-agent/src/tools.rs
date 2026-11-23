@@ -5,7 +5,8 @@
 use std::sync::Arc;
 
 use pen_mcp::tools::{
-    self as mcp_tools, ExecuteArgs, GetAppStateArgs, ReadSkillArgs, SaveArgs, StartTaskArgs,
+    self as mcp_tools, ExecuteArgs, GetAppStateArgs, ImportWebsiteArgs, ReadSkillArgs, SaveArgs,
+    StartTaskArgs,
 };
 use pen_mcp::{BoxFuture, CallCtx, SkillStore, ToolBackend, ToolOutput};
 use serde_json::{Map, Value, json};
@@ -41,7 +42,7 @@ impl ToolDef {
 }
 
 /// The OpenPen tools (`start_task`, `read_skill`, `get_app_state`,
-/// `execute` and, with `include_save`, `save`), with the schemas of
+/// `execute`, `save` with `include_save`, and `import_website`), with the schemas of
 /// `pen-mcp`. `get_style` is left out: it only returns a notice.
 pub fn pen_tool_defs(include_save: bool) -> Vec<ToolDef> {
     mcp_tools::tool_list(include_save)
@@ -180,6 +181,11 @@ impl ToolExecutor for BackendExecutor {
             mcp_tools::SAVE if self.enable_save => {
                 let a: SaveArgs = parse(input)?;
                 Ok(backend_call(self.backend.save(ctx, a.uri)))
+            }
+            mcp_tools::IMPORT_WEBSITE => {
+                let a: ImportWebsiteArgs = parse(input)?;
+                let url = a.validate().map_err(ToolOutput::error)?;
+                Ok(backend_call(self.backend.import_website(ctx, a, url)))
             }
             mcp_tools::READ_SKILL => {
                 let a: ReadSkillArgs = parse(input)?;
@@ -321,7 +327,8 @@ mod tests {
                 "read_skill",
                 "get_app_state",
                 "execute",
-                "save"
+                "save",
+                "import_website"
             ]
         );
         assert!(!pen_tool_defs(false).iter().any(|d| d.name == "save"));
@@ -459,6 +466,16 @@ mod tests {
             }
             let ex2 = ex.clone().with_save(false);
             assert!(ex2.call("save", json!({}), "t8").await.is_error);
+            // `Fake` keeps the trait's default: a readable error, and bad
+            // addresses are refused before reaching the backend.
+            let o = ex
+                .call("import_website", json!({"url": "example.com"}), "t9")
+                .await;
+            assert!(o.is_error && o.text.contains("cannot import"), "{}", o.text);
+            let o = ex
+                .call("import_website", json!({"url": "ftp://x.y"}), "t10")
+                .await;
+            assert!(o.is_error && o.text.contains("http"), "{}", o.text);
         });
     }
 }

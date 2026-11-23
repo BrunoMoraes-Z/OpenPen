@@ -36,11 +36,16 @@ struct Client {
 
 impl Client {
     fn spawn(file: &Path, extra: &[&str]) -> Client {
+        Self::spawn_env(file, extra, &[])
+    }
+
+    fn spawn_env(file: &Path, extra: &[&str], env: &[(&str, &str)]) -> Client {
         let mut child = Command::new(env!("CARGO_BIN_EXE_openpen-cli"))
             .arg("mcp")
             .arg("--headless")
             .arg(file)
             .args(extra)
+            .envs(env.iter().copied())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -386,4 +391,206 @@ fn corpus_t_process_recorder() {
         text.lines().find(|l| l.starts_with("nodes")).unwrap_or("")
     );
     c.close();
+}
+
+/// `import_website` against the browserless stub: one new frame beside the
+/// existing content, saved with the document; bad addresses are refused.
+#[test]
+fn headless_import_website_with_stub() {
+    let dir = scratch("import");
+    let file = dir.join("design.pen");
+    std::fs::write(&file, FIXTURE).unwrap();
+    let mut c = Client::spawn_env(&file, &[], &[("OPENPEN_WEB_IMPORT_STUB", "1")]);
+    let tools = c.request("tools/list", json!({}));
+    assert!(
+        tools["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "import_website"),
+        "{tools}"
+    );
+
+    let (text, _, err) = c.call(
+        "import_website",
+        json!({"url": "example.com", "width": 390}),
+    );
+    assert!(!err, "{text}");
+    assert!(text.contains("https://example.com/"), "{text}");
+    assert!(text.contains("390 x 640"), "{text}");
+    let id = text.split('`').nth(1).expect("frame id").to_string();
+
+    // The frame is in the document, right of the 200 px wide intro frame.
+    let (out, _, err) = c.execute(
+        "Check import",
+        &format!("const n = Get(\"{id}\", {{depth: 0}}); Print(n.name, n.x, n.width)"),
+    );
+    assert!(!err, "{out}");
+    let line = out
+        .lines()
+        .find(|l| l.starts_with("Example Domain"))
+        .expect(&out);
+    let x: f64 = line.split(' ').nth(2).unwrap().parse().unwrap();
+    assert!(x >= 200.0, "{line}");
+
+    let r = c.request(
+        "tools/call",
+        json!({"name": "import_website", "arguments": {"url": "ftp://example.com"}}),
+    );
+    assert_eq!(r["error"]["code"], -32602, "{r}");
+    let (text, _, err) = c.call(
+        "import_website",
+        json!({"url": "example.com", "uri": dir.join("other.pen").display().to_string()}),
+    );
+    assert!(err && text.contains("serves only"), "{text}");
+
+    let (_, _, err) = c.call("save", json!({}));
+    assert!(!err);
+    c.close();
+    let saved = std::fs::read_to_string(&file).unwrap();
+    assert!(saved.contains("Example Domain"));
+}
+
+/// `--readonly` refuses imports (they write asset files).
+#[test]
+fn headless_import_website_readonly() {
+    let dir = scratch("import-ro");
+    let file = dir.join("design.pen");
+    std::fs::write(&file, FIXTURE).unwrap();
+    let mut c = Client::spawn_env(&file, &["--readonly"], &[("OPENPEN_WEB_IMPORT_STUB", "1")]);
+    let (text, _, err) = c.call("import_website", json!({"url": "example.com"}));
+    assert!(err && text.contains("--readonly"), "{text}");
+    c.close();
+}
+
+/// A one-page HTTP server for the real-browser test (stops when dropped).
+struct Site {
+    base: String,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    addr: std::net::SocketAddr,
+}
+
+impl Drop for Site {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        let _ = std::net::TcpStream::connect(self.addr);
+    }
+}
+
+const PAGE: &str = r#"<!doctype html><html><head><meta charset="utf-8"><title>Fixture Shop</title>
+<style>body{margin:0;font-family:Arial,sans-serif;background:#fafafa}
+header{height:64px;background:#1e293b;color:#fff;display:flex;align-items:center;padding:0 32px}
+main{padding:48px 32px}h1{font-size:40px;margin:0 0 16px;color:#0f172a}
+.card{width:320px;padding:24px;border-radius:12px;background:#fff;box-shadow:0 2px 8px #0002}
+img{width:64px;height:64px;display:block}</style></head>
+<body><header>Fixture Shop</header><main><h1>Hello import</h1>
+<div class="card"><img src="/dot.png" alt="dot"><p>A small card with an image.</p></div></main></body></html>"#;
+
+/// A 1x1 red PNG.
+fn dot_png() -> Vec<u8> {
+    let mut buf = Vec::new();
+    {
+        buf.extend_from_slice(&[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08,
+            0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D,
+            0xB0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ]);
+    }
+    buf
+}
+
+fn serve_site() -> Site {
+    use std::io::{BufRead as _, Write as _};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let s = stop.clone();
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            if s.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
+            let Ok(mut c) = conn else { continue };
+            std::thread::spawn(move || {
+                let mut r = BufReader::new(c.try_clone().unwrap());
+                let mut first = String::new();
+                let _ = r.read_line(&mut first);
+                loop {
+                    let mut l = String::new();
+                    if r.read_line(&mut l).unwrap_or(0) == 0 || l.trim().is_empty() {
+                        break;
+                    }
+                }
+                let path = first.split_whitespace().nth(1).unwrap_or("/");
+                let (ctype, body) = match path {
+                    "/" => ("text/html; charset=utf-8", PAGE.as_bytes().to_vec()),
+                    "/dot.png" => ("image/png", dot_png()),
+                    _ => ("text/plain", b"not found".to_vec()),
+                };
+                let _ = write!(
+                    c,
+                    "HTTP/1.1 200 OK\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = c.write_all(&body);
+            });
+        }
+    });
+    Site {
+        base: format!("http://{addr}/"),
+        stop,
+        addr,
+    }
+}
+
+/// The real thing: Edge/Chrome loads a local page and the frame lands in the
+/// document with its image file next to it. Skipped without a browser.
+#[test]
+fn headless_import_website_real_browser() {
+    if pen_import::find_browser().is_none() {
+        eprintln!("skipped: no Edge/Chrome/Chromium found");
+        return;
+    }
+    let site = serve_site();
+    let dir = scratch("import-real");
+    let file = dir.join("design.pen");
+    std::fs::write(&file, FIXTURE).unwrap();
+    let mut c = Client::spawn(&file, &[]);
+    let (text, images, err) = c.call(
+        "import_website",
+        json!({"url": site.base, "width": 800, "height": 600}),
+    );
+    assert!(!err, "{text}");
+    assert!(text.contains("Fixture Shop"), "{text}");
+    assert_eq!(images.len(), 1, "viewport screenshot");
+    assert!(images[0].starts_with(&[0x89, b'P', b'N', b'G']));
+    let id = text.split('`').nth(1).expect("frame id").to_string();
+    let (out, _, err) = c.execute(
+        "Read import",
+        &format!(
+            "const texts = []; Get(\"{id}\", (n) => {{ if (n.type === \"text\") texts.push(n.content) }}); Print(texts.join(\"|\"))"
+        ),
+    );
+    assert!(!err, "{out}");
+    assert!(out.contains("Hello import"), "{out}");
+    // The image was downloaded next to the document.
+    let images_dir = dir.join("images");
+    let n = walk(&images_dir);
+    assert!(n >= 1, "no image under {}: {text}", images_dir.display());
+    c.close();
+}
+
+fn walk(d: &Path) -> usize {
+    std::fs::read_dir(d)
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| {
+                    let p = e.path();
+                    if p.is_dir() { walk(&p) } else { 1 }
+                })
+                .sum()
+        })
+        .unwrap_or(0)
 }

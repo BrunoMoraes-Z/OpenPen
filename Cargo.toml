@@ -14,6 +14,7 @@ members = [
     "crates/pen-shader",
     "crates/pen-mcp",
     "crates/pen-agent",
+    "crates/pen-import",
     "apps/openpen",
     "apps/openpen-cli",
 ]
@@ -38,6 +39,7 @@ pen-script = { path = "crates/pen-script" }
 pen-shader = { path = "crates/pen-shader" }
 pen-mcp = { path = "crates/pen-mcp" }
 pen-agent = { path = "crates/pen-agent" }
+pen-import = { path = "crates/pen-import" }
 
 anyhow = "1"
 thiserror = "2"

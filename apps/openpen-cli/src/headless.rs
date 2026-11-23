@@ -14,7 +14,10 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 use pen_doc::{FsLibraries, SceneDoc, UndoStack};
 use pen_layout::{FsAssets, Pipeline, TextEngine};
-use pen_mcp::{BoxFuture, CallCtx, ExecuteArgs, ToolBackend, ToolError, ToolOutput, ToolResult};
+use pen_mcp::{
+    BoxFuture, CallCtx, ExecuteArgs, ImportWebsiteArgs, ImportedPage, ToolBackend, ToolError,
+    ToolOutput, ToolResult,
+};
 use pen_script::{AppStateInfo, Edit, ExecuteRequest, HeadlessHost, Limits, ScriptEngine};
 
 /// Native stack of the worker thread.
@@ -119,6 +122,24 @@ impl DocState {
         }
     }
 
+    /// Inserts an imported page at a free spot of the root (one undo step).
+    /// Returns the id of the new frame.
+    pub fn insert_frame(
+        &mut self,
+        agent_id: String,
+        frame: &serde_json::Value,
+    ) -> Result<String, String> {
+        let req = pen_script::insert_at_free_spot(agent_id, "Import web page", frame);
+        let resp = self.engine.execute(
+            &mut self.scene,
+            &mut self.pipe,
+            &mut self.undo,
+            &mut self.host,
+            req,
+        );
+        pen_script::inserted_id(&resp).ok_or_else(|| pen_script::place::insert_error(&resp))
+    }
+
     /// Writes the document (lossless; atomic replace through a temp file).
     pub fn save(&mut self) -> Result<String, String> {
         let text = self.scene.save();
@@ -185,23 +206,8 @@ impl HeadlessBackend {
         &self,
         f: impl FnOnce(&mut DocState) -> R + Send + 'static,
     ) -> BoxFuture<'static, Result<R, ToolError>> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let job: Job = Box::new(move |s| {
-            let _ = tx.send(f(s));
-        });
-        let sent = self
-            .jobs
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .send(job)
-            .is_ok();
-        Box::pin(async move {
-            if !sent {
-                return Err(ToolError::Unavailable("the document thread stopped".into()));
-            }
-            rx.await
-                .map_err(|_| ToolError::Unavailable("the document thread stopped".into()))
-        })
+        let jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        run_on(&jobs, f)
     }
 
     /// `None` when `uri` names the served document (or is absent).
@@ -229,6 +235,25 @@ impl HeadlessBackend {
             ))
         })
     }
+}
+
+/// Runs `f` on the worker thread behind `jobs`.
+fn run_on<R: Send + 'static>(
+    jobs: &mpsc::Sender<Job>,
+    f: impl FnOnce(&mut DocState) -> R + Send + 'static,
+) -> BoxFuture<'static, Result<R, ToolError>> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let job: Job = Box::new(move |s| {
+        let _ = tx.send(f(s));
+    });
+    let sent = jobs.send(job).is_ok();
+    Box::pin(async move {
+        if !sent {
+            return Err(ToolError::Unavailable("the document thread stopped".into()));
+        }
+        rx.await
+            .map_err(|_| ToolError::Unavailable("the document thread stopped".into()))
+    })
 }
 
 /// Globals and failed snippets are kept per agent name, so they survive reconnects.
@@ -280,6 +305,58 @@ impl ToolBackend for HeadlessBackend {
                 Ok(t) => Ok(ToolOutput::text(t)),
                 Err(e) => Err(ToolError::Failed(e)),
             }
+        })
+    }
+
+    fn import_website(
+        &self,
+        ctx: CallCtx,
+        args: ImportWebsiteArgs,
+        url: String,
+    ) -> BoxFuture<'static, ToolResult> {
+        if let Some(e) = self.check_uri(args.uri.as_deref()) {
+            return Box::pin(async move { Err(e) });
+        }
+        if self.readonly {
+            return Box::pin(async {
+                Err(ToolError::Failed(
+                    "this server was started with --readonly, and importing a page writes                      image and font files next to the document"
+                        .into(),
+                ))
+            });
+        }
+        let jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let dir = self
+            .path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        let agent = agent_id(&ctx);
+        Box::pin(async move {
+            let t0 = std::time::Instant::now();
+            let page = crate::web_import::import(&args, url.clone(), dir)
+                .await
+                .map_err(ToolError::Failed)?;
+            let frame = page.frame();
+            let frame_id = run_on(&jobs, move |s| s.insert_frame(agent, &frame))
+                .await?
+                .map_err(ToolError::Failed)?;
+            let mut stats = page.stats.clone();
+            stats.push((
+                "time".into(),
+                format!("{:.1} s", t0.elapsed().as_secs_f32()),
+            ));
+            Ok(ImportedPage {
+                frame_id,
+                title: page.title.clone(),
+                url,
+                size: page.size(),
+                stats,
+                warnings: page.warnings.clone(),
+                assets: page.assets,
+                screenshot: page.screenshot.clone(),
+            }
+            .to_output())
         })
     }
 

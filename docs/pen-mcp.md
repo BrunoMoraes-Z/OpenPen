@@ -44,6 +44,7 @@ pub trait ToolBackend: Send + Sync + 'static {
     fn get_app_state(&self, ctx: CallCtx, uri: Option<String>) -> BoxFuture<'static, ToolResult>;
     fn execute(&self, ctx: CallCtx, args: ExecuteArgs) -> BoxFuture<'static, ToolResult>;
     fn save(&self, ctx: CallCtx, uri: Option<String>) -> BoxFuture<'static, ToolResult>;
+    fn import_website(&self, ctx: CallCtx, args: ImportWebsiteArgs, url: String) -> BoxFuture<..> { /* "cannot import" */ }
     fn agent_connected(&self, ctx: &CallCtx) {}
     fn agent_disconnected(&self, ctx: &CallCtx) {}
     fn call_extension(&self, ctx: CallCtx, name: &str, args: Map) -> Option<BoxFuture<..>> { None }
@@ -95,6 +96,7 @@ Os schemas de entrada são gerados com `schemars` a partir das structs em `src/t
 | `execute` | `uri?`, `description`, `input?`, `editId?`, `edits[{find, replace, all?}]` | backend |
 | `save` | `uri?` | backend (pode ser desligada com `McpOptions::enable_save = false`) |
 | `get_style` | `uri?`, `name?`, `params?` | `pen-mcp` (responde que presets de estilo não estão disponíveis) |
+| `import_website` | `uri?`, `url`, `width?`, `height?`, `fullPage?`, `selector?` | backend (`url` normalizada e validada pelo `pen-mcp`; padrão do trait: erro "cannot import"). Ver `docs/web-import.md` |
 
 As skills são lidas de `McpOptions::skills_dir`. `McpOptions::with_default_skills()` procura em
 `$OPENPEN_SKILLS_DIR` e depois em `skills/openpen` ao lado do executável ou em um ancestral

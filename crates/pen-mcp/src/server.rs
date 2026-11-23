@@ -15,7 +15,9 @@ use serde::de::DeserializeOwned;
 use crate::McpOptions;
 use crate::backend::{CallCtx, TOOL_USE_ID_META, ToolBackend, ToolError, ToolOutput, ToolResult};
 use crate::skills::SkillStore;
-use crate::tools::{self, ExecuteArgs, GetAppStateArgs, ReadSkillArgs, SaveArgs, StartTaskArgs};
+use crate::tools::{
+    self, ExecuteArgs, GetAppStateArgs, ImportWebsiteArgs, ReadSkillArgs, SaveArgs, StartTaskArgs,
+};
 
 /// Text sent as the MCP `instructions` of the server.
 pub const INSTRUCTIONS: &str = "\
@@ -29,7 +31,9 @@ and `pen-schema.md` to learn the scripting API and the document format.
 one undo step, and the user watches it happen on the canvas. Editing the .pen file on \
 disk instead bypasses undo and the live view, and the editor may overwrite it.
 - `uri` picks the document (file path or file:// URI); leave it out to use the focused one.
-- Call `save` when the changes should be written to disk.";
+- Call `save` when the changes should be written to disk.
+- `import_website` turns a live web page into a new frame of editable layers (slow: up \
+to a minute or more).";
 
 const STYLE_UNAVAILABLE: &str = "Style presets are not available in OpenPen yet. Pick the \
 typography, colors and spacing yourself, reusing the document's variables when it has them.";
@@ -153,6 +157,13 @@ impl OpenPenServer {
                 })
             }
             tools::GET_STYLE => Ok(ToolOutput::text(STYLE_UNAVAILABLE)),
+            tools::IMPORT_WEBSITE => {
+                let a: ImportWebsiteArgs = parse(args)?;
+                let url = a
+                    .validate()
+                    .map_err(|m| McpError::invalid_params(m, None))?;
+                backend.import_website(ctx, a, url).await
+            }
             other => match backend.call_extension(ctx, other, args) {
                 Some(f) => f.await,
                 None => {

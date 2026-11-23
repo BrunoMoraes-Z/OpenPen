@@ -312,7 +312,8 @@ async fn full_tool_loop_with_retry() {
             "read_skill",
             "get_app_state",
             "execute",
-            "save"
+            "save",
+            "import_website"
         ]
     );
     assert!(

@@ -2,6 +2,8 @@
 
 mod export_code;
 mod headless;
+mod import_url;
+mod web_import;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -68,6 +70,8 @@ enum Command {
     },
     /// Export a document (or nodes) as HTML + CSS or HTML + Tailwind into a directory.
     ExportCode(export_code::ExportCodeArgs),
+    /// Import a web page (headless Chrome/Edge) into a new .pen, assets saved beside it.
+    ImportUrl(import_url::ImportUrlArgs),
     /// MCP server for agents: bridges stdio to the running OpenPen app.
     Mcp {
         /// Socket name of the app instance (default: `desktop`).
@@ -124,6 +128,7 @@ fn main() -> ExitCode {
         )
         .map(|()| true),
         Command::ExportCode(args) => export_code::run(&args).map(|()| true),
+        Command::ImportUrl(args) => import_url::run(&args).map(|()| true),
         Command::Mcp {
             socket,
             agent,

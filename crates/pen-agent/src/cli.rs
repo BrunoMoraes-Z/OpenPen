@@ -25,6 +25,11 @@ use crate::{AgentError, AgentEvent, Attachment, Effort, Usage, UserMessage};
 
 /// Built-in tools the chat may use besides the OpenPen MCP tools.
 pub const WEB_TOOLS: [&str; 2] = ["WebSearch", "WebFetch"];
+
+/// Claude Code's per-call MCP tool timeout (ms), set for the chat's process
+/// so a slow `import_website` (browser + downloads) is not cut short.
+const MCP_TOOL_TIMEOUT_ENV: &str = "MCP_TOOL_TIMEOUT";
+const MCP_TOOL_TIMEOUT_MS: &str = "600000";
 /// Built-in tools that are always denied (belt and braces: `--tools` already
 /// removes them).
 pub const DENIED_TOOLS: [&str; 6] = [
@@ -672,6 +677,13 @@ impl CliWorker {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        // `import_website` can run for a minute or more: make sure Claude
+        // Code waits for slow tool calls (unless the user chose a timeout).
+        if std::env::var_os(MCP_TOOL_TIMEOUT_ENV).is_none()
+            && !self.cfg.env.iter().any(|(k, _)| k == MCP_TOOL_TIMEOUT_ENV)
+        {
+            cmd.env(MCP_TOOL_TIMEOUT_ENV, MCP_TOOL_TIMEOUT_MS);
+        }
         for (k, v) in &self.cfg.env {
             cmd.env(k, v);
         }

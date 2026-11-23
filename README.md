@@ -81,6 +81,10 @@ Also included:
   variables as CSS custom properties with theme blocks, and image assets copied next to the page.
 - Bundled open-source fonts (Inter) and icon fonts (Lucide, Material Symbols, Phosphor), plus on-demand system fonts.
 - Undo/redo in blocks (a whole gesture or agent call is one step), snapping, and keyboard shortcuts modeled on the original editor.
+- Web page import: the globe button (or ☰ › File › Import Web Page…) loads a URL in a headless Edge/Chrome and adds the
+  page as one frame of editable layers, with its images and fonts saved next to the `.pen`. Agents get the same through the
+  `import_website` MCP tool (also in `openpen-cli mcp --headless`). The browser always runs with a fresh temporary profile
+  that is deleted afterwards, so your cookies and sessions are never used. Details: [`docs/web-import.md`](docs/web-import.md).
 
 ## Use with Claude Code
 
@@ -178,6 +182,7 @@ Model (Sonnet / Opus / Haiku, or an API model id) and effort are set in the same
 | `read_skill` | Reads one skill file. |
 | `execute` | Runs a JavaScript snippet against the document as one transaction (one undo step). Fix a failed call with `editId` + `edits` instead of resending it. |
 | `save` | Saves the document (same path as Ctrl+S). |
+| `import_website` | Loads a web page (`url`, optional `width`, `height`, `fullPage`, `selector`) in a private headless browser and adds it as a new frame of editable layers. Returns the frame id, warnings and a screenshot of the original page. |
 | `get_style` | Style presets (answers that presets are not available yet). |
 
 All tools except `start_task` and `read_skill` take an optional `uri` (path or `file://` URI). Without it they target the focused document.
@@ -345,17 +350,17 @@ OpenPen is young and under active development. Windows is the only platform test
 - [x] Home screen with recents and previews
 - [x] Embedded chat panel (Claude Code or the Anthropic API, an agent loop inside the app)
 - [x] Streaming `execute` (edits appear on the canvas while the agent is still writing the code)
+- [x] Browser import (capture a live web page into a design: dialog, MCP `import_website`, headless)
 
 **Planned**
 
 - [ ] AI image generation (`Generate`) and stock images
-- [ ] Browser import (capture a live web page into a design)
 - [ ] macOS and Linux builds
 
 ## Documentation
 
 The design and implementation notes in [`docs/`](docs/) are written in **Portuguese (pt-BR)**. Good starting points:
-[`pen-mcp.md`](docs/pen-mcp.md) (MCP server), [`agent-integration.md`](docs/agent-integration.md) (live agents in the app), [`chat.md`](docs/chat.md) (embedded chat), [`streaming-execute.md`](docs/streaming-execute.md) (streaming `execute`),
+[`pen-mcp.md`](docs/pen-mcp.md) (MCP server), [`web-import.md`](docs/web-import.md) (web page import), [`agent-integration.md`](docs/agent-integration.md) (live agents in the app), [`chat.md`](docs/chat.md) (embedded chat), [`streaming-execute.md`](docs/streaming-execute.md) (streaming `execute`),
 [`pen-script.md`](docs/pen-script.md) (the `execute` engine), [`pen-canvas.md`](docs/pen-canvas.md) (GPU canvas) and
 [`pen-schema-notes.md`](docs/pen-schema-notes.md) (file format), [`pen-codegen.md`](docs/pen-codegen.md) (HTML/CSS export)
 and [`scripts-shaders.md`](docs/scripts-shaders.md) (scripts and shaders). The agent skill files in [`skills/openpen/`](skills/openpen/) are in English.

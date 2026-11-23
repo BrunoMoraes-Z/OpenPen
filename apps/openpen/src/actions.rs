@@ -27,6 +27,7 @@ gpui_kit::actions!(
         ShowShortcuts,
         ShowChat,
         ConnectAgent,
+        ImportWebPage,
         FindLayers,
         Quit,
         // Edit

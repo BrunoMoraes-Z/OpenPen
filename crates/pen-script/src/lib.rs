@@ -26,6 +26,7 @@ pub mod errors;
 pub mod host;
 mod node_script;
 mod nodes;
+pub mod place;
 mod resolve;
 pub mod stream;
 mod tx;
@@ -44,5 +45,6 @@ pub use node_script::{
     parse_header, prepare_output,
 };
 pub use nodes::ROOT_ALIASES;
+pub use place::{insert_at_free_spot, inserted_id};
 pub use stream::complete_prefix;
 pub use tx::Touch;

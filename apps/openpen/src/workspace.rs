@@ -582,6 +582,18 @@ impl Workspace {
         cx.spawn(async move |_, _| task.await.map(|()| path))
     }
 
+    /// Save As for a given tab (the web import dialog on unsaved documents).
+    pub fn save_as(
+        &mut self,
+        state: &Entity<EditorState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.tab_of(state).is_some() {
+            self.save(state, true, false, window, cx);
+        }
+    }
+
     fn save_active(&mut self, save_as: bool, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(a) = self.active {
             let state = self.tabs[a].state.clone();
@@ -876,11 +888,16 @@ impl Workspace {
             .child(action_btn("settings", IconName::Settings, "Settings"))
             .when(!home_active, |d| {
                 d.child(action_btn("present", IconName::Play, "Present"))
-                    .child(action_btn(
-                        "browser",
-                        IconName::Globe,
-                        "Open a webpage and reproduce it on the canvas",
-                    ))
+                    .child(
+                        Self::pill("browser", &p)
+                            .child(Icon::new(IconName::Globe).size(px(14.)))
+                            .tooltip(|w, cx| {
+                                Tooltip::new("Import a web page onto the canvas")
+                                    .action(&ImportWebPage, Some(EDITOR_CTX))
+                                    .build(w, cx)
+                            })
+                            .on_click(|_, w, cx| crate::web_import::dialog::open(w, cx)),
+                    )
             });
         let maximized = window.is_maximized();
         // A solid app bar spanning the whole width. It occludes the canvas
@@ -1012,6 +1029,7 @@ fn app_menu(m: PopupMenu, window: &mut Window, cx: &mut Context<PopupMenu>) -> P
             .separator()
             .menu("Settings…", Box::new(OpenSettings))
             .menu("Connect an AI agent…", Box::new(ConnectAgent))
+            .menu("Import Web Page…", Box::new(ImportWebPage))
             .menu("Close Tab", Box::new(CloseTab))
     })
     .submenu("Edit", window, cx, |m, _, _| {
@@ -1072,6 +1090,8 @@ pub fn set_app_menus(cx: &mut App) {
             MenuItem::separator(),
             MenuItem::action("Save", Save),
             MenuItem::action("Save As…", SaveAs),
+            MenuItem::separator(),
+            MenuItem::action("Import Web Page…", ImportWebPage),
             MenuItem::separator(),
             MenuItem::action("Close Tab", CloseTab),
         ]),
@@ -1135,6 +1155,7 @@ impl Render for Workspace {
                 w.push_notification("Open a document to chat with the agent about it.", cx)
             })
             .on_action(|_: &ConnectAgent, w, cx| crate::agent::ui::open_connect_dialog(w, cx))
+            .on_action(|_: &ImportWebPage, w, cx| crate::web_import::dialog::open(w, cx))
             .on_action(|_: &FindLayers, w, cx| Self::not_yet("Find layers", w, cx))
             .on_action(cx.listener(|t, _: &Quit, w, cx| {
                 if t.should_close(w, cx) {

@@ -32,6 +32,7 @@ pub mod theme;
 pub mod toolbar;
 pub mod tools;
 pub mod ui;
+pub mod web_import;
 pub mod workspace;
 pub mod zoom;
 

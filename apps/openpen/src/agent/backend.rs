@@ -9,7 +9,14 @@
 use futures::FutureExt as _;
 use futures::channel::{mpsc, oneshot};
 use gpui_kit::EntityId;
-use pen_mcp::{BoxFuture, CallCtx, ExecuteArgs, ToolBackend, ToolError, ToolOutput, ToolResult};
+use std::path::PathBuf;
+
+use pen_mcp::{
+    BoxFuture, CallCtx, ExecuteArgs, ImportWebsiteArgs, ImportedPage, ToolBackend, ToolError,
+    ToolOutput, ToolResult,
+};
+
+use crate::web_import::{self, ImportRequest};
 
 /// Environment variable that enables the hidden MCP tool
 /// [`DEBUG_STREAM_TOOL`] (`1`), to drive streaming from outside the app.
@@ -36,6 +43,20 @@ pub enum AgentRequest {
         ctx: CallCtx,
         uri: Option<String>,
         reply: oneshot::Sender<ToolResult>,
+    },
+    /// `import_website`, step 1: the saved document a page will go into.
+    ImportTarget {
+        ctx: CallCtx,
+        uri: Option<String>,
+        reply: oneshot::Sender<Result<PathBuf, ToolError>>,
+    },
+    /// `import_website`, step 2: insert the converted frame into the
+    /// document at `path`; replies with the new frame id.
+    ImportInsert {
+        ctx: CallCtx,
+        path: PathBuf,
+        frame: serde_json::Value,
+        reply: oneshot::Sender<Result<String, ToolError>>,
     },
     Connected(CallCtx),
     Disconnected(CallCtx),
@@ -151,6 +172,64 @@ impl ToolBackend for GuiBackend {
 
     fn save(&self, ctx: CallCtx, uri: Option<String>) -> BoxFuture<'static, ToolResult> {
         self.call(|reply| AgentRequest::Save { ctx, uri, reply })
+    }
+
+    /// Resolves the target document on the foreground, runs the browser
+    /// import on a background thread (dropping this future, e.g. when the
+    /// agent cancels, kills the browser), then inserts the frame on the
+    /// foreground like the dialog does.
+    fn import_website(
+        &self,
+        ctx: CallCtx,
+        args: ImportWebsiteArgs,
+        url: String,
+    ) -> BoxFuture<'static, ToolResult> {
+        let tx = self.tx.clone();
+        async move {
+            let gone = || ToolError::Unavailable(GONE.into());
+            let (reply, rx) = oneshot::channel();
+            tx.unbounded_send(AgentRequest::ImportTarget {
+                ctx: ctx.clone(),
+                uri: args.uri.clone(),
+                reply,
+            })
+            .map_err(|_| gone())?;
+            let path = rx.await.map_err(|_| gone())??;
+            let mut req = ImportRequest::from_mcp(&args, url.clone());
+            req.assets_dir = web_import::assets_dir_for(&path);
+            let t0 = std::time::Instant::now();
+            let mut job = web_import::spawn(req);
+            let outcome = (&mut job.result)
+                .await
+                .unwrap_or(Err(web_import::Failure::Cancelled))
+                .map_err(|f| ToolError::Failed(f.message()))?;
+            let (reply, rx) = oneshot::channel();
+            tx.unbounded_send(AgentRequest::ImportInsert {
+                ctx,
+                path,
+                frame: outcome.frame(),
+                reply,
+            })
+            .map_err(|_| gone())?;
+            let frame_id = rx.await.map_err(|_| gone())??;
+            let mut stats = outcome.stats.clone();
+            stats.push((
+                "time".into(),
+                format!("{:.1} s", t0.elapsed().as_secs_f32()),
+            ));
+            Ok(ImportedPage {
+                frame_id,
+                title: outcome.title.clone(),
+                url,
+                size: outcome.size(),
+                stats,
+                warnings: outcome.warnings.clone(),
+                assets: outcome.assets_written.len(),
+                screenshot: outcome.screenshot_png.clone(),
+            }
+            .to_output())
+        }
+        .boxed()
     }
 
     fn agent_connected(&self, ctx: &CallCtx) {

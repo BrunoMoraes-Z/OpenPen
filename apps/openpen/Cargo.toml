@@ -20,7 +20,11 @@ pen-script.workspace = true
 pen-shader.workspace = true
 # Embedded chat (docs/chat.md).
 pen-agent.workspace = true
+# Web page import (docs/web-import.md).
+pen-import.workspace = true
 futures = "0.3"
+# pen-import runs on its own Tokio runtime (web import).
+tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 # Home: recents store, thumbnails (pen-raster), dates.
 pen-raster.workspace = true
 serde.workspace = true

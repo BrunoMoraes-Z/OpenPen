@@ -5,7 +5,10 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use pen_mcp::{BoxFuture, CallCtx, ExecuteArgs, ToolBackend, ToolError, ToolOutput, ToolResult};
+use pen_mcp::{
+    BoxFuture, CallCtx, ExecuteArgs, ImportWebsiteArgs, ImportedPage, ToolBackend, ToolError,
+    ToolOutput, ToolResult,
+};
 
 /// 1x1 transparent PNG.
 pub const PNG: &[u8] = &[
@@ -23,6 +26,7 @@ pub enum Event {
     AppState(CallCtx, Option<String>),
     Execute(CallCtx, ExecuteArgs),
     Save(CallCtx, Option<String>),
+    Import(CallCtx, ImportWebsiteArgs, String),
 }
 
 #[derive(Default)]
@@ -81,6 +85,32 @@ impl ToolBackend for MockBackend {
     fn save(&self, ctx: CallCtx, uri: Option<String>) -> BoxFuture<'static, ToolResult> {
         self.push(Event::Save(ctx, uri));
         Box::pin(async { Ok(ToolOutput::text("saved")) })
+    }
+
+    fn import_website(
+        &self,
+        ctx: CallCtx,
+        args: ImportWebsiteArgs,
+        url: String,
+    ) -> BoxFuture<'static, ToolResult> {
+        self.push(Event::Import(ctx, args.clone(), url.clone()));
+        Box::pin(async move {
+            tokio::task::yield_now().await;
+            if url.contains("unreachable") {
+                return Err(ToolError::Failed("navigation failed: unreachable".into()));
+            }
+            Ok(ImportedPage {
+                frame_id: "web1".into(),
+                title: "Example Domain".into(),
+                url,
+                size: (args.width.unwrap_or(1440) as f32, 600.0),
+                stats: vec![("nodes".into(), "7".into())],
+                warnings: vec!["1 image could not be downloaded".into()],
+                assets: 1,
+                screenshot: Some(PNG.to_vec()),
+            }
+            .to_output())
+        })
     }
 
     fn agent_connected(&self, ctx: &CallCtx) {

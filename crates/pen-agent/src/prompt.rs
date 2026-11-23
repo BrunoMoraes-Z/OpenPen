@@ -23,8 +23,9 @@ the user asked a question that needs an answer or you need a decision from them.
 const CHAT_PREAMBLE: &str = "\
 You are the design assistant embedded in OpenPen, a native editor for .pen design \
 files. You read and change the user's documents only through the OpenPen tools \
-(`start_task`, `read_skill`, `get_app_state`, `execute`, `save`). Begin a design \
-task with `start_task` to load `execute.md` and `pen-schema.md`.";
+(`start_task`, `read_skill`, `get_app_state`, `execute`, `save`, \
+`import_website`). Begin a design task with `start_task` to load `execute.md` and \
+`pen-schema.md`.";
 
 /// Builds the system prompt from the contents of `SKILL.md`.
 pub fn chat_system_prompt(skill_index: &str) -> String {

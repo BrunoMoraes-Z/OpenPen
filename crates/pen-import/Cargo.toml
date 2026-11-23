@@ -1,0 +1,32 @@
+[package]
+name = "pen-import"
+description = "Importa páginas web (via Chrome/Edge headless + CDP) como nós .pen editáveis"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+image.workspace = true
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net"] }
+# Plain `ws://127.0.0.1` to the local browser only: no TLS stack needed.
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+base64 = "0.22"
+sha1_smol = "1"
+tempfile = "3"
+# Same usvg/resvg as pen-export (0.45), so no second copy enters the tree.
+resvg = "0.45"
+ttf-parser = "0.25"
+
+[dev-dependencies]
+pen-doc.workspace = true
+pen-layout.workspace = true
+pen-raster.workspace = true
+pen-render.workspace = true
+
+[lib]
+# rustdoc is not available in this toolchain
+doctest = false

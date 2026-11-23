@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Nav</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  nav { display: flex; align-items: center; justify-content: space-between; height: 72px; padding: 0 40px; background: #0f172a; color: #e2e8f0; }
+  .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 20px; color: #fff; }
+  .links { display: flex; gap: 32px; list-style: none; margin: 0; padding: 0; }
+  .links a { color: #cbd5e1; text-decoration: none; font-size: 15px; }
+  .icons { display: flex; align-items: center; gap: 16px; color: #94a3b8; }
+  .icons svg { width: 22px; height: 22px; }
+  .avatar { width: 36px; height: 36px; border-radius: 50%; background: #38bdf8; border: 2px solid #f8fafc; }
+  .crumbs { padding: 16px 40px; font-size: 14px; color: #64748b; border-bottom: 1px solid #e2e8f0; }
+  .crumbs a { color: #2563eb; }
+  .content { padding: 32px 40px; }
+  .content h1 { margin: 0 0 12px; font-size: 32px; line-height: 40px; }
+  .content ul { margin: 0; padding-left: 24px; }
+  .content li { margin: 4px 0; }
+  .tag::before { content: "#"; color: #9ca3af; margin-right: 2px; }
+  .new::after { content: "NEW"; margin-left: 8px; padding: 0 6px; font-size: 11px; font-weight: 700; color: #fff; background: #ef4444; border-radius: 4px; }
+  .mask-icon { display: inline-block; width: 24px; height: 24px; background-color: #16a34a; vertical-align: middle;
+    -webkit-mask: url("/img/check.svg") center / contain no-repeat; mask: url("/img/check.svg") center / contain no-repeat; }
+</style>
+</head>
+<body>
+  <nav>
+    <div class="logo">
+      <svg width="32" height="32" viewBox="0 0 32 32" aria-label="Logo"><circle cx="16" cy="16" r="15" fill="#6366f1"/><path d="M9 21 L16 8 L23 21 Z" fill="#ffffff"/></svg>
+      <span>Acme</span>
+    </div>
+    <ul class="links">
+      <li><a href="#">Product</a></li>
+      <li><a href="#">Pricing</a></li>
+      <li><a href="#" class="new">Changelog</a></li>
+      <li><a href="#">Docs</a></li>
+    </ul>
+    <div class="icons">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+      <div class="avatar"></div>
+    </div>
+  </nav>
+  <div class="crumbs"><a href="#">Home</a> / <a href="#">Guides</a> / Getting started</div>
+  <div class="content">
+    <h1>Getting started <span class="mask-icon"></span></h1>
+    <ul>
+      <li>Install the CLI with one command.</li>
+      <li>Open a <span class="tag">design</span> file and press play.</li>
+      <li>Share the link with your team.</li>
+    </ul>
+  </div>
+</body>
+</html>

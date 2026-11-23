@@ -388,6 +388,8 @@ async fn dispatch(
     cx: &mut AsyncApp,
 ) {
     let mut coord: StreamCoordinator<Doc> = StreamCoordinator::new(ScriptEngine::new());
+    // Inserts of `import_website` (no streams or agent globals involved).
+    let mut import_engine = ScriptEngine::new();
     let mut parked: Vec<Call> = Vec::new();
     // (agent, tool use id) -> (uri, document) of the open streams.
     let mut stream_docs: HashMap<(String, String), (Option<String>, Doc)> = HashMap::new();
@@ -458,6 +460,52 @@ async fn dispatch(
             }
             AgentRequest::Save { ctx, uri, reply } => {
                 let r = save(&ctx, uri.as_deref(), window, &ws, cx).await;
+                let _ = reply.send(r);
+            }
+            AgentRequest::ImportTarget { ctx, uri, reply } => {
+                cx.update(|cx| cx.global_mut::<AgentHub>().agent(&ctx));
+                let r = match target(uri.as_deref(), window, &ws, cx).await {
+                    Ok(s) => s
+                        .read_with(cx, |s, _| s.path.clone())
+                        .ok_or_else(|| ToolError::Failed(crate::web_import::UNSAVED_DOC.into())),
+                    Err(e) => Err(e),
+                };
+                let _ = reply.send(r);
+            }
+            AgentRequest::ImportInsert {
+                ctx,
+                path,
+                frame,
+                reply,
+            } => {
+                let uri = path.display().to_string();
+                let r = match target(Some(&uri), window, &ws, cx).await {
+                    Ok(state) => {
+                        let view = view_of(&state, &ws, cx)
+                            .unwrap_or(pen_render::Rect::new(0.0, 0.0, 1.0, 1.0));
+                        let agent = cx.update(|cx| cx.global_mut::<AgentHub>().agent(&ctx));
+                        let r = state.update(cx, |s, cx| {
+                            crate::web_import::insert_page(
+                                s,
+                                &mut import_engine,
+                                &agent,
+                                &frame,
+                                view,
+                                cx,
+                            )
+                        });
+                        log(&format!(
+                            "MCP: import_website from '{}': {}",
+                            ctx.agent_name,
+                            match &r {
+                                Ok(id) => format!("inserted {id}"),
+                                Err(e) => format!("failed: {e}"),
+                            }
+                        ));
+                        r.map_err(ToolError::Failed)
+                    }
+                    Err(e) => Err(e),
+                };
                 let _ = reply.send(r);
             }
             AgentRequest::StreamPartial {

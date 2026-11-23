@@ -21,8 +21,10 @@ pen-export.workspace = true
 pen-codegen.workspace = true
 pen-script.workspace = true
 pen-shader.workspace = true
+pen-import.workspace = true
 clap = { version = "=4.6.7", features = ["derive"] }
-tokio = { version = "1", features = ["rt", "io-std", "sync"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "io-std", "sync"] }
+serde_json.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
