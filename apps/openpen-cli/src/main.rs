@@ -1,5 +1,7 @@
 //! OpenPen headless CLI: `validate`, `migrate`, `render` and `mcp`.
 
+mod headless;
+
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -68,9 +70,12 @@ enum Command {
         /// Agent name shown in the editor (default: the MCP client's name).
         #[arg(long)]
         agent: Option<String>,
-        /// Serve this .pen file without the app (not available yet).
+        /// Serve this .pen file over stdio without the app (in-memory editing, `save` writes it).
         #[arg(long, value_name = "FILE")]
         headless: Option<PathBuf>,
+        /// With --headless: never write the file (the `save` tool is not offered).
+        #[arg(long, requires = "headless")]
+        readonly: bool,
         /// Print the Claude Code `mcpServers` entry for this executable and exit.
         #[arg(long)]
         print_config: bool,
@@ -114,11 +119,13 @@ fn main() -> ExitCode {
             socket,
             agent,
             headless,
+            readonly,
             print_config,
         } => run_mcp(
             socket.as_deref(),
             agent.as_deref(),
             headless.as_deref(),
+            readonly,
             print_config,
         )
         .map(|()| true),
@@ -212,34 +219,60 @@ fn run_mcp(
     socket: Option<&str>,
     agent: Option<&str>,
     headless: Option<&Path>,
+    readonly: bool,
     print_config: bool,
 ) -> Result<()> {
     if print_config {
         let exe = std::env::current_exe().context("locating openpen-cli")?;
-        println!(
-            "{}",
-            pen_mcp::config::claude_code_config_string(&exe, socket)
-        );
+        let mut config = pen_mcp::config::claude_code_config(&exe, socket);
+        if let Some(file) = headless {
+            let file = std::path::absolute(file).unwrap_or_else(|_| file.to_path_buf());
+            let mut args = vec![
+                "mcp".to_string(),
+                "--headless".to_string(),
+                file.display().to_string(),
+            ];
+            if readonly {
+                args.push("--readonly".into());
+            }
+            config["mcpServers"]["openpen"]["args"] = args.into();
+        }
+        println!("{config:#}");
         return Ok(());
     }
-    if let Some(file) = headless {
-        // TODO(headless-mcp): load `file` into a pen-script backed `ToolBackend`
-        // and call `pen_mcp::serve_stdio(backend, McpOptions { agent_name, ..
-        // McpOptions::with_default_skills() })` on this runtime.
-        anyhow::bail!(
-            "`mcp --headless {}` is not implemented yet; start the OpenPen app and use `openpen-cli mcp`",
-            file.display()
-        );
-    }
-    let name = socket.unwrap_or(pen_mcp::socket::DEFAULT_SOCKET_NAME);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .context("starting the async runtime")?;
-    let result = runtime.block_on(pen_mcp::socket::run_stdio_shim(name, agent));
+    let result = match headless {
+        Some(file) => {
+            let started = std::time::Instant::now();
+            let backend = headless::HeadlessBackend::open(file, readonly)?;
+            eprintln!(
+                "openpen: serving {} headless ({} ms to load){}",
+                backend.path().display(),
+                started.elapsed().as_millis(),
+                if readonly { ", read-only" } else { "" }
+            );
+            let opts = pen_mcp::McpOptions {
+                agent_name: agent.map(str::to_string),
+                enable_save: !readonly,
+                ..pen_mcp::McpOptions::with_default_skills()
+            };
+            runtime
+                .block_on(pen_mcp::serve_stdio(std::sync::Arc::new(backend), opts))
+                .map_err(anyhow::Error::from)
+        }
+        None => {
+            let name = socket.unwrap_or(pen_mcp::socket::DEFAULT_SOCKET_NAME);
+            runtime
+                .block_on(pen_mcp::socket::run_stdio_shim(name, agent))
+                .map_err(Into::into)
+        }
+    };
     // A blocking stdin read may still be pending; do not wait for it.
     runtime.shutdown_background();
-    result.map_err(Into::into)
+    result
 }
 
 fn run_render(

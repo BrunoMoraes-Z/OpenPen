@@ -40,6 +40,9 @@ pub struct Workspace {
     untitled: usize,
     /// Set once the user agreed to discard unsaved changes on quit.
     force_close: bool,
+    /// Last document tab that was active (agent calls without `uri` go to
+    /// it while Home is shown).
+    last_doc: Option<WeakEntity<EditorState>>,
     _subs: Vec<Subscription>,
 }
 
@@ -104,6 +107,7 @@ impl Workspace {
             theme_override,
             untitled: 0,
             force_close: false,
+            last_doc: None,
             _subs: subs,
         };
         for path in cli_paths(std::env::args()) {
@@ -228,6 +232,7 @@ impl Workspace {
         self.active = ix.filter(|&i| i < self.tabs.len());
         match self.active {
             Some(i) => {
+                self.last_doc = Some(self.tabs[i].state.downgrade());
                 let h = self.tabs[i].editor.read(cx).canvas_focus(cx);
                 h.focus(window, cx);
                 let name = self.tabs[i].state.read(cx).name.clone();
@@ -367,28 +372,12 @@ impl Workspace {
             .detach();
             return;
         };
-        let t0 = Instant::now();
-        let data = s.doc.save_string();
-        let step = s.doc.current_step();
-        let serialize = t0.elapsed();
+        let task = self.write_doc(state, path.clone(), cx);
         let state = state.clone();
-        let target = path.clone();
-        let task = cx.background_spawn(async move { save::write_atomic(&target, data.as_bytes()) });
         cx.spawn_in(window, async move |this, cx| {
             let res = task.await;
             let _ = this.update_in(cx, |this, window, cx| match res {
                 Ok(()) => {
-                    log(&format!(
-                        "saved {} (serialize on UI thread {:.1?}, total {:.1?})",
-                        path.display(),
-                        serialize,
-                        t0.elapsed()
-                    ));
-                    state.update(cx, |s, cx| {
-                        s.doc.mark_saved_at(step);
-                        cx.notify();
-                    });
-                    recent::add(&path, cx);
                     if close_after && let Some(ix) = this.tab_of(&state) {
                         this.remove_tab(ix, window, cx);
                     }
@@ -399,6 +388,126 @@ impl Workspace {
             });
         })
         .detach();
+    }
+
+    /// Serializes a document on the UI thread and writes it atomically on the
+    /// background executor; marks it saved (at the undo step it had when
+    /// serialized) and adds it to the recent files.
+    fn write_doc(
+        &mut self,
+        state: &Entity<EditorState>,
+        path: PathBuf,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(), String>> {
+        let t0 = Instant::now();
+        let s = state.read(cx);
+        let data = s.doc.save_string();
+        let step = s.doc.current_step();
+        let serialize = t0.elapsed();
+        let state = state.clone();
+        let target = path.clone();
+        let task = cx.background_spawn(async move { save::write_atomic(&target, data.as_bytes()) });
+        cx.spawn(async move |_, cx| match task.await {
+            Ok(()) => {
+                log(&format!(
+                    "saved {} (serialize on UI thread {:.1?}, total {:.1?})",
+                    path.display(),
+                    serialize,
+                    t0.elapsed()
+                ));
+                state.update(cx, |s, cx| {
+                    s.doc.mark_saved_at(step);
+                    cx.notify();
+                });
+                cx.update(|cx| recent::add(&path, cx));
+                Ok(())
+            }
+            Err(e) => Err(e.to_string()),
+        })
+    }
+
+    // ------------------------------------------------------------ agents
+
+    /// Document tabs as seen by the agent router (canonical paths).
+    pub fn tab_infos(&self, cx: &App) -> Vec<crate::agent::route::TabInfo<Entity<EditorState>>> {
+        self.tabs
+            .iter()
+            .map(|t| crate::agent::route::TabInfo {
+                id: t.state.clone(),
+                path: t.state.read(cx).path.as_deref().map(canonical),
+            })
+            .collect()
+    }
+
+    /// The active document, or the last active one while Home is shown.
+    pub fn focused_doc(&self) -> Option<Entity<EditorState>> {
+        match self.active {
+            Some(i) => Some(self.tabs[i].state.clone()),
+            None => self
+                .last_doc
+                .as_ref()
+                .and_then(|w| w.upgrade())
+                .filter(|s| self.tab_of(s).is_some()),
+        }
+    }
+
+    pub fn doc_states(&self) -> Vec<Entity<EditorState>> {
+        self.tabs.iter().map(|t| t.state.clone()).collect()
+    }
+
+    /// The tab showing `path` (canonical), if any.
+    pub fn doc_for_path(&self, path: &Path, cx: &App) -> Option<Entity<EditorState>> {
+        let canon = canonical(path);
+        self.tabs
+            .iter()
+            .find(|t| {
+                t.state
+                    .read(cx)
+                    .path
+                    .as_deref()
+                    .is_some_and(|p| canonical(p) == canon)
+            })
+            .map(|t| t.state.clone())
+    }
+
+    /// Visible world rect of a document's canvas.
+    pub fn visible_world(&self, state: &Entity<EditorState>, cx: &App) -> Option<pen_render::Rect> {
+        let ix = self.tab_of(state)?;
+        let editor = self.tabs[ix].editor.read(cx);
+        Some(editor.canvas_host().read(cx).visible_world(cx))
+    }
+
+    /// (name, path, focused) of every open document.
+    pub fn open_documents(&self, cx: &App) -> Vec<(SharedString, Option<PathBuf>, bool)> {
+        let focused = self.focused_doc().map(|s| s.entity_id());
+        self.tabs
+            .iter()
+            .map(|t| {
+                let s = t.state.read(cx);
+                (
+                    s.name.clone(),
+                    s.path.clone(),
+                    Some(t.state.entity_id()) == focused,
+                )
+            })
+            .collect()
+    }
+
+    /// `save` tool: writes a document that already has a file (never shows a
+    /// dialog); resolves to the path written.
+    pub fn save_for_agent(
+        &mut self,
+        state: &Entity<EditorState>,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<PathBuf, String>> {
+        let Some(path) = state.read(cx).path.clone() else {
+            return Task::ready(Err(
+                "This document has never been saved, so it has no file yet. Ask the user to save it (File > Save As) first."
+                    .into(),
+            ));
+        };
+        let task = self.write_doc(state, path.clone(), cx);
+        cx.spawn(async move |_, _| task.await.map(|()| path))
     }
 
     fn save_active(&mut self, save_as: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -691,6 +800,7 @@ impl Workspace {
                 )
                 .child(action_btn("goodies", IconName::Gift, "Goodies"))
             })
+            .child(crate::agent::ui::agents_pill(&p, cx))
             .child(action_btn("settings", IconName::Settings, "Settings"))
             .when(!home_active, |d| {
                 d.child(action_btn("present", IconName::Play, "Present"))
@@ -821,6 +931,7 @@ fn app_menu(m: PopupMenu, window: &mut Window, cx: &mut Context<PopupMenu>) -> P
             .menu("Save As…", Box::new(SaveAs))
             .separator()
             .menu("Settings…", Box::new(OpenSettings))
+            .menu("Connect an AI agent…", Box::new(ConnectAgent))
             .menu("Close Tab", Box::new(CloseTab))
     })
     .submenu("Edit", window, cx, |m, _, _| {
@@ -870,6 +981,7 @@ pub fn set_app_menus(cx: &mut App) {
     cx.set_menus([
         Menu::new("OpenPen").items([
             MenuItem::action("Settings…", OpenSettings),
+            MenuItem::action("Connect an AI agent…", ConnectAgent),
             MenuItem::separator(),
             MenuItem::action("Quit OpenPen", Quit),
         ]),
@@ -950,6 +1062,7 @@ impl Render for Workspace {
             .on_action(|_: &CommandPalette, w, cx| Self::not_yet("The command palette", w, cx))
             .on_action(|_: &ShowShortcuts, w, cx| Self::not_yet("The shortcuts dialog", w, cx))
             .on_action(|_: &ShowChat, w, cx| Self::not_yet("The agent chat", w, cx))
+            .on_action(|_: &ConnectAgent, w, cx| crate::agent::ui::open_connect_dialog(w, cx))
             .on_action(|_: &FindLayers, w, cx| Self::not_yet("Find layers", w, cx))
             .on_action(cx.listener(|t, _: &Quit, w, cx| {
                 if t.should_close(w, cx) {

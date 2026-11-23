@@ -104,7 +104,8 @@ divider). `cornerRadius` is a number or `[topLeft, topRight, bottomRight, bottom
 - An instance is `{type: "ref", ref: "<componentId>"}`. Properties set directly on the instance
   override the component's root (`width`, `fill`, `padding`, ...).
 - `descendants` overrides nodes inside the instance, keyed by the component's node ids (or paths
-  `"nestedInstanceId/childId"` for instances nested in the component):
+  `"nestedInstanceId/childId"` for instances nested in the component; in `execute`, unique node
+  names are also accepted and converted to ids):
   - an object **without** `type` patches properties: `{"labelId": {content: "Save"}}`;
   - an object **with** `type` replaces that node entirely;
   - `children` inside a patch fills a slot (a frame with `slot` in the component).

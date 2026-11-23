@@ -1,6 +1,6 @@
 [package]
 name = "openpen-cli"
-description = "OpenPen headless: validate/migrate/render"
+description = "OpenPen headless: validate/migrate/render/mcp"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -18,8 +18,9 @@ pen-render.workspace = true
 pen-raster.workspace = true
 pen-mcp.workspace = true
 pen-export.workspace = true
+pen-script.workspace = true
 clap = { version = "=4.6.7", features = ["derive"] }
-tokio = { version = "1", features = ["rt", "io-std"] }
+tokio = { version = "1", features = ["rt", "io-std", "sync"] }
 
 [dev-dependencies]
 serde_json.workspace = true

@@ -285,6 +285,16 @@ fn error_rolls_back_and_reports_location() {
     assert!(r.prints.is_empty());
     assert_eq!(h.scene.save(), before);
     assert_eq!(h.undo.undo_len(), 0);
+    // QuickJS may point inside the arguments; the call text still starts at the call.
+    let r = h.run("a = \"nope\"\nUpdate(a + \"/x\", {fill: \"#000\"})");
+    assert!(!r.ok);
+    let e = r.error.clone().unwrap();
+    assert_eq!(
+        e.call.as_deref(),
+        Some("Update(a + \"/x\", {fill: \"#000\"})"),
+        "{}",
+        r.text
+    );
     // Syntax errors too.
     let r = h.run("x = 1\nInsert(document, {type: \"frame\",, })");
     assert!(!r.ok);
@@ -507,8 +517,26 @@ TakeScreenshot(["document"])
     let png = image::open(&r.exported[0]).unwrap();
     assert_eq!((png.width(), png.height()), (80, 60));
     assert!(r.exported[1].extension().unwrap() == "jpg");
+    // Vector formats (pen-export): default scale 1 = document units.
+    let r = h.ok(&format!(
+        "Export([{id:?}], \"svg\", {out:?})
+Export([{id:?}, \"document\"], \"pdf\", {out:?})"
+    ));
+    assert_eq!(r.exported.len(), 3, "{:?}", r.exported);
+    let svg = std::fs::read_to_string(&r.exported[0]).unwrap();
+    assert!(svg.starts_with("<svg") || svg.starts_with("<?xml"), "{svg}");
+    assert!(
+        svg.contains("width=\"40\"") && svg.contains("#ff0000"),
+        "{svg}"
+    );
+    for pdf in &r.exported[1..] {
+        assert_eq!(pdf.extension().unwrap(), "pdf");
+        assert!(std::fs::read(pdf).unwrap().starts_with(b"%PDF-"));
+    }
+    assert!(r.exported[2].ends_with("document.pdf"));
+    assert!(r.text.contains(".svg"), "{}", r.text);
     let _ = std::fs::remove_dir_all(&dir);
-    let r = h.run(&format!("Export([{id:?}], \"pdf\", \"x\")"));
+    let r = h.run(&format!("Export([{id:?}], \"html-css\", \"x\")"));
     assert!(!r.ok && r.text.contains("not supported"), "{}", r.text);
     let r = h.run("Generate(\"ai\", \"x\", \"a cat\")");
     assert!(!r.ok && r.text.contains("not supported"), "{}", r.text);

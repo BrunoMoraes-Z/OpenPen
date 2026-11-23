@@ -19,14 +19,14 @@ O crate `crates/pen-mcp` expõe o OpenPen a agentes externos (Claude Code, Codex
         | ToolBackend (trait)
         v
  app GPUI (pula para a main thread, aplica no documento, responde por oneshot)
- ou backend headless (pen-script, etapa futura)
+ ou backend headless (`openpen-cli mcp --headless`: pen-script numa thread própria)
 ```
 
 Pontos-chave:
 
 - **`pen-mcp` não depende do motor de documentos.** Ele só fala o protocolo. Quem possui os
-  documentos implementa o trait `ToolBackend` (o app GUI e, depois, o backend headless com
-  `pen-script`). Isso mantém o crate sem GPUI e sem `pen-doc`.
+  documentos implementa o trait `ToolBackend` (o app GUI e o backend headless do `openpen-cli`,
+  que usa `pen-script`). Isso mantém o crate sem GPUI e sem `pen-doc`.
 - Ao contrário do legado (que usa o framing do node-ipc), o socket carrega **JSON-RPC MCP puro**,
   com o mesmo enquadramento do stdio (uma mensagem JSON por linha). O shim é só uma bomba de
   bytes e cada conexão é uma sessão MCP normal do `rmcp`.
@@ -124,12 +124,43 @@ agente embutido futuro).
 ```
 openpen-cli mcp [--socket NOME] [--agent NOME]   # shim stdio <-> app em execução
 openpen-cli mcp --print-config [--socket NOME]   # imprime o trecho de config do Claude Code
-openpen-cli mcp --headless arquivo.pen           # TODO: ainda não implementado (erro, código 2)
+openpen-cli mcp --headless arquivo.pen [--readonly] [--agent NOME]
+                                                 # servidor stdio sem o app (abaixo)
+openpen-cli mcp --print-config --headless arquivo.pen [--readonly]
 ```
 
-O `--headless` já está no parser; o ponto de extensão está marcado com
-`TODO(headless-mcp)` em `apps/openpen-cli/src/main.rs` (montar um `ToolBackend` com `pen-script`
-e chamar `serve_stdio`).
+## Modo headless
+
+`openpen-cli mcp --headless arquivo.pen` serve **um** documento por stdio, sem janela nem app
+aberto (CI, servidores, agentes que só precisam gerar/alterar `.pen`). Implementação:
+`apps/openpen-cli/src/headless.rs`.
+
+- **Backend**: `HeadlessBackend` implementa `ToolBackend` sobre um `DocState` (`SceneDoc` +
+  `Pipeline` com `FsAssets` + `UndoStack` + `ScriptEngine` + `HeadlessHost`). O estado vive numa
+  **thread dedicada** (`openpen-doc`, pilha de 16 MiB); cada chamada de ferramenta vira uma closure
+  enviada por canal e respondida por `oneshot`, então as chamadas são serializadas como no app.
+- **Pilha do JS**: na thread de 16 MiB o limite do QuickJS sobe para 8 MiB
+  (`Limits::stack_bytes`); a recursão JS chega a ~2380 níveis (medido no teste
+  `deep_recursion_on_worker`, ≈3,4 KiB por quadro no build MSVC) contra ~150 com o padrão de
+  512 KiB numa thread de 1 MiB. Os outros 8 MiB sobram para o host (layout, render, PDF).
+- **`execute`**: `ExecuteArgs` → `ExecuteRequest` (`agent_id` = nome do agente — `--agent` ou
+  `clientInfo.name` — ou o `client_id` se vazio; globais e `editId` sobrevivem a reconexões do
+  mesmo agente). Resposta: o texto do motor, as screenshots como conteúdo `image` e
+  `isError: true` quando `ok == false` (o texto traz linha, chamada e `editId`).
+- **`get_app_state`**: `pen_script::describe_app_state` (o mesmo texto do app) sem seleção nem
+  viewport, mais uma linha "Headless mode ... Unsaved changes: yes/no".
+- **`save`**: grava o arquivo com o save sem perdas do `SceneDoc` (mantém fins de linha/BOM),
+  via arquivo temporário + `rename`. Nada é gravado sem `save`. Com `--readonly` a ferramenta não
+  é anunciada e as mudanças ficam só na memória (screenshots e `Export` continuam funcionando).
+- **`uri`**: omitido ou igual ao arquivo servido (caminho ou `file://`, comparado após
+  `absolute`/`canonicalize`). Outro caminho dá `isError` com a mensagem "This headless OpenPen
+  server serves only `<arquivo>` ..." explicando como abrir outro.
+- Skills: a mesma busca do modo normal (`OPENPEN_SKILLS_DIR` ou `skills/openpen` subindo a partir
+  do executável).
+- Medidas (`testdata/user/t-process-recorder.pen`, 2995 nós; debug e release dão o mesmo, pois
+  as dependências já são otimizadas no perfil dev): carregar + layout ≈ 50 ms; processo + carga +
+  `initialize` ≈ 130 ms (a primeira execução de um binário recém-compilado pode levar ~0,5 s por
+  causa do antivírus); `get_app_state` < 1 ms; `Get` com visitor em todos os nós ≈ 53 ms.
 
 ## Como conectar o Claude Code (manual, opt-in)
 
@@ -156,6 +187,16 @@ as configs de vários clientes a cada inicialização; aqui a instalação é op
 3. Abra o OpenPen antes de usar as ferramentas. Para outra instância, passe
    `--socket NOME` nos dois lados.
 
+### Claude Code sem o app (headless)
+
+```
+claude mcp add openpen -- C:\caminho\para\openpen-cli.exe mcp --headless C:\designs\app.pen
+```
+
+ou `openpen-cli mcp --print-config --headless C:\designs\app.pen` e cole o JSON (os `args`
+ficam `["mcp", "--headless", "<caminho absoluto>"]`). Um servidor por documento: para editar
+outro arquivo, registre outra entrada (ex.: `openpen-app2`). O agente deve chamar `save` no fim.
+
 ## Segurança
 
 - **Só IPC local**: named pipe no Windows (criado com `PIPE_REJECT_REMOTE_CLIENTS`, o padrão do
@@ -175,4 +216,13 @@ as configs de vários clientes a cada inicialização; aqui a instalação é op
 - `crates/pen-mcp/tests/socket.rs`: servidor de socket com nome único por teste, dois clientes
   simultâneos, callbacks de conexão/desconexão, shutdown, shim ponta a ponta e erro "not running".
 - `apps/openpen-cli/tests/mcp.rs`: o binário `openpen-cli mcp` contra um servidor de socket
-  criado no teste, `--print-config` e `--headless`.
+  criado no teste e `--print-config`.
+- `apps/openpen-cli/tests/headless.rs`: o binário real `mcp --headless` numa cópia de fixture em
+  `target/headless-e2e/`: `initialize`, `tools/list`, `start_task`, `get_app_state` (e `uri`
+  errado), `execute` montando uma tela (frame com auto-layout, textos, componente, instância com
+  override em `descendants`), screenshot, erro proposital → `editId` → correção por `edits`,
+  `save` e recarga com pen-doc; `--readonly` (sem `save`, `Export` svg, arquivo intocado); arquivo
+  inexistente; `--print-config --headless`; smoke do corpus (`t-process-recorder.pen`, pula se
+  ausente).
+- `apps/openpen-cli/src/headless.rs` (unitários): `uri`, save/estado "Unsaved changes",
+  `--readonly` e profundidade de recursão na thread.

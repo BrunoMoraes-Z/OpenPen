@@ -4764,13 +4764,17 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cosmic-text",
+ "futures",
  "glam",
  "gpui-kit",
  "pen-canvas",
  "pen-doc",
  "pen-layout",
+ "pen-mcp",
  "pen-render",
  "pen-schema",
+ "pen-script",
+ "serde_json",
 ]
 
 [[package]]
@@ -4786,6 +4790,7 @@ dependencies = [
  "pen-raster",
  "pen-render",
  "pen-schema",
+ "pen-script",
  "serde_json",
  "tokio",
 ]
@@ -5054,6 +5059,7 @@ dependencies = [
  "image",
  "indexmap",
  "pen-doc",
+ "pen-export",
  "pen-layout",
  "pen-raster",
  "pen-render",

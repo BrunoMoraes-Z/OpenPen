@@ -611,6 +611,40 @@ impl SceneDocument {
         }
     }
 
+    /// A gesture (drag) has an undo block open: agent scripts wait for it.
+    pub fn in_gesture(&self) -> bool {
+        self.undo.in_block()
+    }
+
+    /// Runs an agent script (MCP `execute`) as one undo step, then updates
+    /// layout and the display list. On failure the document is unchanged.
+    pub fn run_script(
+        &mut self,
+        engine: &mut pen_script::ScriptEngine,
+        host: &mut dyn pen_script::ScriptHost,
+        req: pen_script::ExecuteRequest,
+    ) -> pen_script::ExecuteResponse {
+        // The engine reads layout: bring it up to date with pending edits.
+        self.flush();
+        let before = self.undo.undo_len();
+        let resp = engine.execute(&mut self.scene, &mut self.pipe, &mut self.undo, host, req);
+        if resp.ok && (resp.ops > 0 || self.undo.undo_len() > before) {
+            self.next_step += 1;
+            self.step_ids.push(self.next_step);
+            self.redo_ids.clear();
+        }
+        // A rollback leaves the pipeline stale; an update is cheap otherwise.
+        self.pending = true;
+        self.flush();
+        resp
+    }
+
+    /// The `get_app_state` summary of this document.
+    pub fn describe(&mut self, info: &pen_script::AppStateInfo) -> String {
+        self.flush();
+        pen_script::describe_app_state(&self.scene, &mut self.pipe, info)
+    }
+
     /// True while some image fill is still decoding in the background.
     pub fn has_pending_assets(&self) -> bool {
         self.pipe.has_pending_assets()

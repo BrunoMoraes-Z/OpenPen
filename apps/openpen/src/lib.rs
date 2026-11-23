@@ -8,6 +8,7 @@
 //!   `DesignCanvas` there.
 
 pub mod actions;
+pub mod agent;
 pub mod assets;
 pub mod canvas_host;
 pub mod clipboard;
@@ -55,7 +56,7 @@ pub fn run() {
                 }),
                 ..TitleBar::window_options()
             };
-            let (handle, _) = gpui_kit::open_window(opts, cx, |window, cx| {
+            let (handle, workspace) = gpui_kit::open_window(opts, cx, |window, cx| {
                 let forced = theme::cli_override(std::env::args());
                 theme::apply(
                     forced.unwrap_or_else(|| theme::mode_for(window.appearance())),
@@ -66,6 +67,8 @@ pub fn run() {
                 cx.new(|cx| workspace::Workspace::new(window, cx))
             })
             .expect("open window");
+            // MCP server for external agents (docs/agent-integration.md).
+            agent::hub::start(handle, workspace.downgrade(), cx);
             let main_id = handle.window_id();
             cx.on_window_closed(move |cx, id| {
                 if id == main_id {

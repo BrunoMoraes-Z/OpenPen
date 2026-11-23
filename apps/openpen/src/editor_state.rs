@@ -7,6 +7,8 @@ use std::path::PathBuf;
 
 use gpui_kit::*;
 
+use crate::agent::fx::AgentFx;
+use crate::agent::{AgentInfo, AppScriptHost, touched_nodes};
 use crate::inspector::model::{PropEdit, PropertySource};
 use crate::layers::model::{FlatRow, LayerId, LayerTreeSource, containers_below, flatten, reveal};
 use crate::scene_document::{Arrange, SceneDocument, id_of, key_of};
@@ -49,6 +51,8 @@ pub struct EditorState {
     /// [`EditorState::changed`] find them again.
     sel_snap: (Vec<LayerId>, Vec<Option<String>>),
     exp_snap: Vec<(LayerId, String)>,
+    /// Flashes and cursors of agents editing this document.
+    pub agent_fx: AgentFx,
 }
 
 /// Where a context menu was requested.
@@ -90,6 +94,7 @@ impl EditorState {
             reveal_tick: 0,
             sel_snap: (Vec::new(), Vec::new()),
             exp_snap: Vec::new(),
+            agent_fx: AgentFx::new(),
         };
         s.reset_tree();
         s
@@ -421,6 +426,36 @@ impl EditorState {
             self.selection = out.into_iter().map(id_of).collect();
             self.changed(cx);
         }
+    }
+
+    // ------------------------------------------------------------ agents
+
+    /// Runs an agent's `execute` script (one undo step, or nothing on error)
+    /// and refreshes the panels like any other edit. Touched nodes flash and
+    /// the agent's cursor visits them; `view` is the visible world rect
+    /// (where a new cursor appears).
+    pub fn run_agent_script(
+        &mut self,
+        engine: &mut pen_script::ScriptEngine,
+        agent: &AgentInfo,
+        req: pen_script::ExecuteRequest,
+        view: pen_render::Rect,
+        cx: &mut Context<Self>,
+    ) -> pen_script::ExecuteResponse {
+        let resp = self.doc.run_script(engine, &mut AppScriptHost, req);
+        self.changed(cx);
+        let nodes = touched_nodes(&self.doc, &resp.touched);
+        let spawn = pen_render::Vec2::new(view.x + view.w * 0.5, view.y + view.h * 0.5);
+        self.agent_fx.touch(
+            &agent.client_id,
+            &agent.name,
+            agent.color,
+            &nodes,
+            spawn,
+            std::time::Instant::now(),
+        );
+        cx.notify();
+        resp
     }
 
     // ------------------------------------------------------- clipboard

@@ -28,6 +28,12 @@ let resp = eng.execute(&mut scene, &mut pipe, &mut undo, &mut pen_script::Headle
   comentários, regex, profundidade de colchetes, cabeçalhos `if/for/while`, continuação por
   `else/catch/finally`, `.metodo()` e operadores). Fronteiras de quebra de linha ou `}` só são
   confirmadas quando o próximo token chega.
+- `describe_app_state(scene, pipe, &AppStateInfo { uri, selection, viewport, connected_agents })`:
+  o markdown do `get_app_state`, compartilhado pelo app e pelo headless. Lista documento ativo,
+  seleção (`id (tipo): nome`, inclusive nós dentro de instâncias), até 10 nós de topo com bounds e
+  "visible to the user"/"outside the viewport" (só com viewport), componentes reutilizáveis
+  (até 30), resumo de variáveis/eixos de tema e a dica de chamar `start_task`/`read_skill` antes de
+  editar. O `pipe` precisa estar atualizado (`pipe.update(scene)`).
 - Globais: `persisted_globals(agent)` / `set_persisted_globals` (para salvar com a sessão de chat),
   `forget_agent`.
 
@@ -68,7 +74,9 @@ let resp = eng.execute(&mut scene, &mut pipe, &mut undo, &mut pen_script::Headle
 - **Screenshots/Export** são registrados durante o snippet e renderizados no fim, antes do commit,
   com a cena atualizada; falha de renderização/escrita reverte a chamada.
 - **Erros**: a pilha do QuickJS traz `snippet.js:linha:coluna`; o primeiro quadro do snippet dá a
-  posição e o texto da chamada (expressão com parênteses balanceados). Em streaming, cada pedaço é
+  posição e o texto da chamada (expressão com parênteses balanceados). O QuickJS às vezes aponta
+  para dentro dos argumentos (`Update(a + "/x", ...)` aponta para `"/x"`); nesse caso o texto
+  recua até a chamada mais interna da linha que contém a coluna. Em streaming, cada pedaço é
   avaliado com quebras de linha/espaços à frente para manter linha e coluna.
 - **editId**: o snippet que falhou fica guardado (até 64) com o agente; `edits` aplicam
   find/replace em ordem (match único salvo `all`, tentando variantes com `\n` escapado). Se a
@@ -109,8 +117,9 @@ let resp = eng.execute(&mut scene, &mut pipe, &mut undo, &mut pen_script::Headle
 
 ## Lacunas conhecidas
 
-- `Generate` não existe (erro explicativo). `Export` só `png`/`jpeg`/`webp` (webp sem perdas);
-  `pdf`, `svg` e HTML dão erro "not supported yet" (o host pode implementar).
+- `Generate` não existe (erro explicativo). `Export` faz `png`/`jpeg`/`webp` (webp sem perdas) e,
+  via pen-export, `svg` e `pdf` vetoriais (texto real, fontes embutidas no PDF; escala padrão 1
+  em vez de 2). HTML (`html-css`, `html-tailwind`) dá erro "not supported yet".
 - Funções da API são síncronas (sem `Promise`); jobs pendentes são executados depois de cada
   pedaço.
 - `includePathGeometry` é ignorado. `resolveVariables` usa o tema de cada nó quando ele está na cena.
@@ -123,6 +132,7 @@ let resp = eng.execute(&mut scene, &mut pipe, &mut undo, &mut pen_script::Headle
 - Pilha: os 512 KiB contam a partir do topo capturado em cada `Context::with`, e o host roda em
   cima deles; com o build MSVC cada chamada JS custa ~3 KiB de pilha nativa, então a recursão JS
   para em ~150 níveis (`RangeError`, sem derrubar o processo; testado numa thread de 1 MiB, o
-  tamanho da principal no Windows). Aumentar o limite exige rodar o motor numa thread com mais pilha.
+  tamanho da principal no Windows). O headless (`openpen-cli mcp --headless`) roda o motor numa
+  thread de 16 MiB com `stack_bytes` = 8 MiB: ~2380 níveis.
 - Streaming: o divisor é heurístico (não é um parser); um falso positivo só faz o pedaço falhar e
   o erro aparece no `execute` final.

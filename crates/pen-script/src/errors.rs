@@ -38,6 +38,7 @@ pub fn call_text(src: &str, line: usize, col: usize) -> Option<String> {
         }
         offset += l.len();
     }
+    let offset = call_start(src, offset.min(src.len()));
     let tail = src.get(offset..)?;
     let text = balanced(tail);
     let text = text.trim();
@@ -45,6 +46,65 @@ pub fn call_text(src: &str, line: usize, col: usize) -> Option<String> {
         return None;
     }
     Some(truncate(text, 240))
+}
+
+fn is_ident(c: char) -> bool {
+    c.is_alphanumeric() || c == '_' || c == '$'
+}
+
+/// QuickJS sometimes reports a column inside the arguments of the failing call
+/// (e.g. at the second operand of `Update(a + "/x", ...)`). When `offset` is not
+/// at `name(`, backs up to the innermost call on the same line that encloses it.
+fn call_start(src: &str, offset: usize) -> usize {
+    let Some(tail) = src.get(offset..) else {
+        return offset;
+    };
+    let name_len = tail
+        .char_indices()
+        .find(|&(_, c)| !(is_ident(c) || c == '.'))
+        .map_or(tail.len(), |(i, _)| i);
+    if name_len > 0 && tail[name_len..].trim_start().starts_with('(') {
+        return offset;
+    }
+    let line_start = src[..offset].rfind('\n').map_or(0, |i| i + 1);
+    let mut open = Vec::new();
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (i, c) in src[line_start..offset].char_indices() {
+        if let Some(q) = quote {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '"' | '\'' | '`' => quote = Some(c),
+            '(' => open.push(line_start + i),
+            ')' => {
+                open.pop();
+            }
+            _ => {}
+        }
+    }
+    for &paren in open.iter().rev() {
+        let before = src[..paren].trim_end();
+        let start = before
+            .char_indices()
+            .rev()
+            .take_while(|&(_, c)| is_ident(c) || c == '.')
+            .last()
+            .map(|(i, _)| i);
+        if let Some(start) = start
+            && before[start..].starts_with(|c: char| c.is_alphabetic() || c == '_' || c == '$')
+        {
+            return start;
+        }
+    }
+    offset
 }
 
 fn balanced(s: &str) -> &str {
@@ -110,5 +170,16 @@ mod tests {
             Some("Update(\"x\", {fill: \"#f)f\", n: [1, 2]})")
         );
         assert_eq!(snippet_location("    at snippet.js:1:9\n"), Some((1, 9)));
+        // A column inside the arguments backs up to the enclosing call.
+        let src = "x = 1\nUpdate(i + \"/Description\", {content: \"(a)\"})\n";
+        assert_eq!(
+            call_text(src, 2, 12).as_deref(),
+            Some("Update(i + \"/Description\", {content: \"(a)\"})")
+        );
+        let src = "const n = Get(page, n => n.id)[0]; Insert(n.id + \"/q\", {})";
+        assert_eq!(
+            call_text(src, 1, 50).as_deref(),
+            Some("Insert(n.id + \"/q\", {})")
+        );
     }
 }

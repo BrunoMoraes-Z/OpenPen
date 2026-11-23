@@ -76,7 +76,8 @@ pub struct ExportRequest {
     pub format: ExportFormat,
     /// Absolute output path: a directory for image formats, a file for HTML.
     pub output: PathBuf,
-    /// Image scale factor (default 2).
+    /// Scale factor: device pixels (png/jpeg/webp, default 2) or output units
+    /// (svg px / pdf pt, default 1) per document unit.
     pub scale: f32,
     /// JPEG/WEBP quality 1-100.
     pub quality: Option<u8>,
@@ -170,31 +171,53 @@ pub fn render_rgba(
     Ok(out)
 }
 
-/// Exports PNG / JPEG / WEBP files (`<output>/<id>.<ext>`).
+/// Exports PNG / JPEG / WEBP / SVG / PDF files (`<output>/<id>.<ext>`).
+///
+/// SVG and PDF are vector exports (pen-export) at `scale` output units (px / pt)
+/// per document unit; text stays real text (fonts embedded in the PDF).
 pub fn export_images(
     scene: &SceneDoc,
     pipe: &mut Pipeline,
     req: &ExportRequest,
 ) -> Result<Vec<PathBuf>, String> {
     let fmt = req.format;
-    if !matches!(
-        fmt,
-        ExportFormat::Png | ExportFormat::Jpeg | ExportFormat::Webp
-    ) {
+    if matches!(fmt, ExportFormat::HtmlTailwind | ExportFormat::HtmlCss) {
         return Err(format!(
-            "export format '{}' is not supported yet (use png, jpeg or webp)",
-            fmt.extension()
+            "export format '{}' is not supported yet (use png, jpeg, webp, svg or pdf)",
+            match fmt {
+                ExportFormat::HtmlTailwind => "html-tailwind",
+                _ => "html-css",
+            }
         ));
     }
     std::fs::create_dir_all(&req.output)
         .map_err(|e| format!("cannot create {}: {e}", req.output.display()))?;
     let mut out = Vec::new();
     for t in &req.targets {
-        let img = render_rgba(scene, pipe, t, req.scale)?;
         let path = req
             .output
             .join(format!("{}.{}", t.file_stem(), fmt.extension()));
-        write_image(&img, fmt, req.quality, &path)?;
+        match fmt {
+            ExportFormat::Svg | ExportFormat::Pdf => {
+                let (list, r) = target_list(scene, pipe, t)?;
+                let opts = pen_export::ExportOptions {
+                    region: Some(clamp_viewport(r)),
+                    scale: req.scale,
+                    ..Default::default()
+                };
+                let bytes = if fmt == ExportFormat::Svg {
+                    pen_export::svg::export(&list, &opts).into_bytes()
+                } else {
+                    pen_export::pdf::export(&list, &opts).map_err(|e| e.to_string())?
+                };
+                std::fs::write(&path, bytes)
+                    .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+            }
+            _ => {
+                let img = render_rgba(scene, pipe, t, req.scale)?;
+                write_image(&img, fmt, req.quality, &path)?;
+            }
+        }
         out.push(path);
     }
     Ok(out)

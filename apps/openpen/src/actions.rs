@@ -26,6 +26,7 @@ gpui_kit::actions!(
         CommandPalette,
         ShowShortcuts,
         ShowChat,
+        ConnectAgent,
         FindLayers,
         Quit,
         // Edit

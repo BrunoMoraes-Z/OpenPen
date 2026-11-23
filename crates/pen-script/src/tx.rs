@@ -1472,14 +1472,12 @@ impl Tx {
         let format = ExportFormat::parse(fmt_s).ok_or_else(|| {
             format!("unknown export format '{fmt_s}' (png, jpeg, webp, pdf, svg, html-tailwind, html-css)")
         })?;
-        if !matches!(
-            format,
-            ExportFormat::Png | ExportFormat::Jpeg | ExportFormat::Webp
-        ) {
+        if matches!(format, ExportFormat::HtmlTailwind | ExportFormat::HtmlCss) {
             return Err(format!(
-                "export format '{fmt_s}' is not supported yet in OpenPen (use png, jpeg or webp)"
+                "export format '{fmt_s}' is not supported yet in OpenPen (use png, jpeg, webp, svg or pdf)"
             ));
         }
+        let vector = matches!(format, ExportFormat::Svg | ExportFormat::Pdf);
         let out = str_arg(args, "outputPath", "Export outputPath")?;
         let mut output = PathBuf::from(out);
         if output.is_relative() {
@@ -1496,7 +1494,7 @@ impl Tx {
             .and_then(|o| o.get("scale"))
             .and_then(Value::as_f64)
             .filter(|s| s.is_finite() && *s > 0.0)
-            .unwrap_or(2.0)
+            .unwrap_or(if vector { 1.0 } else { 2.0 })
             .min(8.0) as f32;
         let quality = opts
             .and_then(|o| o.get("quality"))

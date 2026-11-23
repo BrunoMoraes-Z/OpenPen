@@ -20,6 +20,7 @@
 //!
 //! `ScriptEngine` is `Send` and works synchronously on the caller's thread.
 
+mod app_state;
 mod engine;
 pub mod errors;
 pub mod host;
@@ -28,6 +29,7 @@ mod resolve;
 pub mod stream;
 mod tx;
 
+pub use app_state::{AppStateInfo, describe_app_state};
 pub use engine::{
     Edit, ExecuteRequest, ExecuteResponse, Limits, PartialStatus, ScriptEngine, ScriptError,
     apply_edits,

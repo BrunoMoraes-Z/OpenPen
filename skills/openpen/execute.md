@@ -12,7 +12,8 @@
 - **Warnings** (invalid values, unknown properties, properties that do not apply to a node type)
   are listed in the response. Invalid values are ignored; fix them in the next call.
 - **Limits**: about 2 s of pure JavaScript CPU per call (time spent inside API functions does not
-  count), 256 MiB of heap, a 512 KiB stack, and 55 s in total. Infinite loops are interrupted.
+  count), 256 MiB of heap, a limited native stack (very deep recursion fails with a
+  `RangeError`: prefer loops) and 55 s in total. Infinite loops are interrupted.
 - Write plain, compact code: loops, helper functions, object spreads and template strings are
   welcome; comments are not needed.
 
@@ -62,7 +63,7 @@ function FindEmptySpace(input: { width: number; height: number; direction?: "rig
 // Output
 function Print(...values: unknown[]): void;
 function TakeScreenshot(nodeIds: string[]): void;
-function Export(nodeIds: string[], format: "png" | "jpeg" | "webp", outputPath: string, options?: { scale?: number; quality?: number }): void;
+function Export(nodeIds: string[], format: "png" | "jpeg" | "webp" | "svg" | "pdf", outputPath: string, options?: { scale?: number; quality?: number }): void;
 
 interface GetOptions {
   depth?: number;             // without visitor: levels of children to include (0 = node only;
@@ -88,6 +89,11 @@ Adds a node at the end of `parent`'s children and returns its id. `nodeData` may
 `children` (each with its own `type`), so a whole card can be one `Insert`. Instances are inserted
 as `{type: "ref", ref: componentId, ...rootOverrides, descendants: {...}}`. To put content into a
 slot of an instance, insert into the slot's path: `Insert(instId + "/slotId", {...})`.
+
+`descendants` keys may be the component's node ids or, when unique inside the component, their
+**names** (`descendants: {Title: {content: "Billing"}}`); names are stored as ids. Paths used by
+`Get`/`Update`/`Replace` (`instId + "/" + childId`) always need ids. To collect a component's ids
+by name in one line: `const ids = Object.fromEntries(Get(compId, n => [n.name, n.id]))`.
 
 ### Copy
 
@@ -180,9 +186,11 @@ checks.
 
 ### Export
 
-Writes image files: `outputPath` is a directory (relative paths are relative to the `.pen` file);
-each node becomes `<nodeId>.<ext>`. `scale` defaults to 2; `quality` (1-100) applies to JPEG.
-The written paths are listed in the response.
+Writes files: `outputPath` is a directory (relative paths are relative to the `.pen` file);
+each node becomes `<nodeId>.<ext>` (`"document"` becomes `document.<ext>`). `png`, `jpeg` and
+`webp` are bitmaps whose `scale` (pixels per design unit) defaults to 2; `quality` (1-100)
+applies to JPEG. `svg` and `pdf` are vector files with real, selectable text (fonts embedded in
+the PDF); their `scale` defaults to 1. The written paths are listed in the response.
 
 ### Generate
 

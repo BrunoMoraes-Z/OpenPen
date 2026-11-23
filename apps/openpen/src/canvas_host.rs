@@ -1206,6 +1206,19 @@ impl CanvasHost {
             }
         }
 
+        // Agent flashes and cursors at this instant (pure timing state).
+        let now = std::time::Instant::now();
+        let (fx_rings, fx_cursors) = {
+            let s = self.state.read(cx);
+            if s.agent_fx.animating(now) {
+                // Keep frames coming only while something moves or fades.
+                window.request_animation_frame();
+                crate::agent::paint::collect(&s.agent_fx, &s.doc, zoom, now)
+            } else {
+                (Vec::new(), Vec::new())
+            }
+        };
+
         // Phase 2: paint.
         window.with_content_mask(Some(ContentMask { bounds: vb }), |window| {
             let mut hit = Vec::with_capacity(labels.len());
@@ -1360,6 +1373,7 @@ impl CanvasHost {
             for m in &measures {
                 paint_measure(window, cx, family, m, &to_s);
             }
+            crate::agent::paint::paint(window, cx, &fx_rings, &fx_cursors, &to_s, zoom, family);
         });
     }
 }

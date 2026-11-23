@@ -42,9 +42,15 @@ JavaScript snippets to the `execute` tool. Before your first edit, read:
 - Repeated UI (rows, cards, nav items) comes from a component or a JavaScript loop, not from
   copy-pasted literals.
 
+## Headless sessions
+
+When `get_app_state` says "Headless mode", no editor window is open and nobody sees the canvas:
+check your work with `TakeScreenshot`, and call `save` when the task is done (nothing is written
+to disk before that). There is no selection; find nodes with `Get`.
+
 ## Limits of this version
 
 - `Generate` (AI images, stock photos, generated SVG) is not available. Put image files next to
   the `.pen` file and use them as image fills (`{type: "image", url: "./img/hero.png"}`), or draw
   vector artwork with `path` nodes.
-- `Export` writes `png`, `jpeg` and `webp` only.
+- `Export` writes `png`, `jpeg`, `webp`, `svg` and `pdf` (no HTML/code export yet).

@@ -145,14 +145,3 @@ fn print_config_is_opt_in_snippet() {
     assert_eq!(entry["args"], json!(["mcp"]));
     assert!(entry["command"].as_str().unwrap().contains("openpen-cli"));
 }
-
-#[test]
-fn headless_is_not_wired_yet() {
-    let out = bin()
-        .args(["mcp", "--headless", "x.pen"])
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
-    assert_eq!(out.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&out.stderr).contains("not implemented"));
-}
