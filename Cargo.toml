@@ -1,0 +1,56 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/pen-schema",
+    "crates/pen-doc",
+    "crates/pen-fonts",
+    "crates/pen-layout",
+    "crates/pen-render",
+    "crates/pen-raster",
+    "crates/pen-canvas",
+    "apps/openpen",
+    "apps/openpen-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Bruno Moraes"]
+
+[workspace.dependencies]
+pen-schema = { path = "crates/pen-schema" }
+pen-doc = { path = "crates/pen-doc" }
+pen-fonts = { path = "crates/pen-fonts" }
+pen-layout = { path = "crates/pen-layout" }
+pen-render = { path = "crates/pen-render" }
+pen-raster = { path = "crates/pen-raster" }
+pen-canvas = { path = "crates/pen-canvas" }
+
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+indexmap = { version = "2", features = ["serde"] }
+smallvec = { version = "1", features = ["serde", "union"] }
+glam = "0.30"
+taffy = "0.9"
+tiny-skia = "0.11"
+cosmic-text = "0.19"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+gpui-kit = "0.9.1"
+pretty_assertions = "1"
+
+[profile.dev]
+# GPUI is slow unoptimized; optimize deps, keep our crates debuggable.
+opt-level = 1
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+debug = "line-tables-only"
+
+[profile.bench]
+inherits = "release"

@@ -1,0 +1,31 @@
+[package]
+name = "pen-layout"
+description = "Layout flex dos frames .pen (taffy), texto (cosmic-text) e construção da DisplayList"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pen-doc.workspace = true
+pen-render.workspace = true
+pen-fonts.workspace = true
+taffy.workspace = true
+cosmic-text.workspace = true
+smallvec.workspace = true
+glam.workspace = true
+image.workspace = true
+ttf-parser = "0.25"
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+pen-schema.workspace = true
+pen-raster.workspace = true
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+
+[lib]
+# rustdoc is not available in this toolchain
+doctest = false
+
+[[bench]]
+name = "pipeline"
+harness = false

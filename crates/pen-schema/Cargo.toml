@@ -1,0 +1,25 @@
+[package]
+name = "pen-schema"
+description = "Tipos serde do formato .pen, migrações e validação"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+indexmap.workspace = true
+thiserror.workspace = true
+smallvec.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+
+[lib]
+# rustdoc is not available in this toolchain
+doctest = false
+
+[[bench]]
+name = "load"
+harness = false

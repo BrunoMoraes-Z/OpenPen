@@ -1,0 +1,25 @@
+[package]
+name = "pen-canvas"
+description = "Elemento de canvas GPUI que desenha a DisplayList na GPU, com pan/zoom e culling"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pen-render.workspace = true
+pen-raster.workspace = true
+gpui-kit.workspace = true
+smallvec.workspace = true
+# Same versions GPUI already pulls in (lyon for tessellation, image for RenderImage frames).
+lyon = "1.0"
+image = { version = "0.25", default-features = false }
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+
+[lib]
+# rustdoc is not available in this toolchain
+doctest = false
+
+[[example]]
+name = "canvas_stress"

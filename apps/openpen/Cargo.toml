@@ -1,0 +1,25 @@
+[package]
+name = "openpen"
+description = "OpenPen — editor de design (GPUI)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gpui-kit.workspace = true
+anyhow.workspace = true
+pen-schema.workspace = true
+pen-doc.workspace = true
+pen-layout.workspace = true
+pen-render.workspace = true
+pen-canvas.workspace = true
+glam.workspace = true
+cosmic-text.workspace = true
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[[bin]]
+name = "openpen"
+path = "src/main.rs"

@@ -1,0 +1,21 @@
+[package]
+name = "pen-fonts"
+description = "Fontes open-source embutidas (Inter + fontes de ícones lucide/Material Symbols/Phosphor) e mapas nome→codepoint"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# Same version as cosmic-text's (one `fontdb::Database` type across the workspace).
+fontdb = { version = "0.23", default-features = false, features = ["std", "fs", "memmap"] }
+
+[features]
+default = ["material-symbols", "phosphor"]
+# Material Symbols Outlined/Rounded/Sharp (~8.7 MB of font data).
+material-symbols = []
+# Phosphor 1.4 (~1.1 MB).
+phosphor = []
+
+[lib]
+# rustdoc is not available in this toolchain
+doctest = false

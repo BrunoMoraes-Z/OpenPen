@@ -1,0 +1,22 @@
+[package]
+name = "openpen-cli"
+description = "OpenPen headless: validate/migrate/render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "openpen-cli"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+pen-schema.workspace = true
+pen-doc.workspace = true
+pen-layout.workspace = true
+pen-render.workspace = true
+pen-raster.workspace = true
+clap = { version = "=4.6.7", features = ["derive"] }
+
+[dev-dependencies]
+serde_json.workspace = true

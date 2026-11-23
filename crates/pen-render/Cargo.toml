@@ -1,0 +1,17 @@
+[package]
+name = "pen-render"
+description = "Cena resolvida -> DisplayList agnóstica de backend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+glam.workspace = true
+smallvec.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+
+[lib]
+# rustdoc is not available in this toolchain
+doctest = false

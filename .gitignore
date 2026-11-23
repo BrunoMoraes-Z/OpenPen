@@ -1,0 +1,10 @@
+/target
+# referência do app legado (proprietário; não redistribuir)
+/legacy/
+# corpus de teste: amostras do fornecedor e designs pessoais
+/testdata/legacy/
+/testdata/user/
+# saídas de testes golden
+**/*.actual.png
+# screenshots mostram designs pessoais de testdata/user
+/docs/screenshots/
