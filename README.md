@@ -32,7 +32,7 @@ MCP clients can read the open document and edit it live while you watch. The can
 - **Native and fast.** No Electron and no web view. The canvas draws on the GPU through GPUI. A 1.4 MB document opens in about 50 ms, and pan/zoom stays at 60 fps on large files.
 - **Built for agents.** Agents edit through a small transactional JavaScript API (`execute`). Each call is one undo step, and a failing call rolls back completely. The canvas flashes the nodes an agent touched and shows the agent's cursor and name.
 - **Opt-in by design.** OpenPen never writes other apps' configuration files. You connect an agent with one command. All traffic is local IPC (a named pipe on Windows): no TCP port, no HTTP.
-- **Headless too.** The same engine runs without a window (`openpen-cli`): validate, migrate and render `.pen` files to PNG/SVG/PDF, or serve a document to an agent over stdio in CI.
+- **Headless too.** The same engine runs without a window (`openpen-cli`): validate, migrate and render `.pen` files to PNG/SVG/PDF, export them as HTML/CSS or Tailwind code, or serve a document to an agent over stdio in CI.
 - **Lossless.** Unknown fields survive a load/save round trip, and `.pen` files from schema 1.0 to 2.22 are migrated on load.
 
 ## Features
@@ -75,7 +75,10 @@ MCP clients can read the open document and edit it live while you watch. The can
 Also included:
 
 - Procedural `script` nodes (JavaScript in QuickJS) and GLSL shader fills/strokes/effects (GPU through wgpu, with a CPU fallback).
+  Shaders that use `@time` or `@mouse` animate while their node is selected and on screen, as in Pen; nothing animates (0% CPU) otherwise.
 - Export to PNG (CPU rasterizer), and to vector SVG and PDF with real text and embedded fonts.
+- Code export to HTML + CSS or HTML + Tailwind v4: flexbox layout, gradients, shadows, inline SVG icons and vectors,
+  variables as CSS custom properties with theme blocks, and image assets copied next to the page.
 - Bundled open-source fonts (Inter) and icon fonts (Lucide, Material Symbols, Phosphor), plus on-demand system fonts.
 - Undo/redo in blocks (a whole gesture or agent call is one step), snapping, and keyboard shortcuts modeled on the original editor.
 
@@ -161,7 +164,10 @@ All tools except `start_task` and `read_skill` take an optional `uri` (path or `
 ### The `execute` API in brief
 
 Snippets run in QuickJS with a small set of globals: `Insert`, `Copy`, `Update`, `Replace`, `Move`, `Delete`,
-`SetVariables`, `GetVariables`, `Get` (with an optional visitor), `FindEmptySpace`, `Print`, `TakeScreenshot` and `Export`.
+`SetVariables`, `GetVariables`, `Get` (with an optional visitor), `FindEmptySpace`, `Print`, `TakeScreenshot` and `Export`
+(`png`, `jpeg`, `webp`, `svg`, `pdf`, `html-css`, `html-tailwind`).
+Any string that starts with `$` is a variable reference; write `"\\$18,420"` in JS for a literal dollar sign
+(the response warns when a `$` value names no variable).
 Limits: about 2 s of JavaScript CPU per call, 256 MiB of heap and 55 s in total.
 
 ```js
@@ -230,6 +236,9 @@ openpen-cli render design.pen -o out.svg      # vector SVG with real text
 openpen-cli render design.pen -o out.pdf --outline   # PDF, text as outlines
 openpen-cli render design.pen -o card.png --node card1 --scale 2 --bg "#FFFFFF"
 openpen-cli render design.pen -o dark.png --theme mode=dark
+openpen-cli render design.pen -o t2.png --time 2   # animated shaders at t = 2 s (default 0)
+openpen-cli export-code design.pen --node screen1 --format html-css -o site/       # index.html + styles.css + assets/
+openpen-cli export-code design.pen --format html-tailwind -o site-tw/ --theme mode=dark
 openpen-cli mcp [--headless file.pen] [--print-config]
 ```
 
@@ -246,12 +255,13 @@ The core compiles and is tested without a window. GPUI is used only in `pen-canv
 | `pen-render` | Backend-agnostic `DisplayList`. |
 | `pen-raster` | CPU backend (tiny-skia + cosmic-text): headless rendering, PNG export, golden tests. |
 | `pen-export` | Vector SVG and PDF export from the DisplayList. |
+| `pen-codegen` | HTML + CSS and HTML + Tailwind code export from the scene and its layout. |
 | `pen-canvas` | GPUI element that draws the DisplayList on the GPU: pan/zoom, culling, per-chunk caches, CPU fallback for complex effects. |
 | `pen-script` | The `execute` engine and `script` nodes (QuickJS through rquickjs), transactional. |
-| `pen-shader` | GLSL shaders for fills/effects (naga front-end, wgpu on the GPU, CPU evaluator). |
+| `pen-shader` | GLSL shaders for fills/effects (naga front-end, wgpu on the GPU, CPU evaluator), animated `@time`/`@mouse`. |
 | `pen-mcp` | MCP server ([rmcp](https://github.com/modelcontextprotocol/rust-sdk)): stdio, local socket and shim, decoupled from the engine through a `ToolBackend` trait. |
 | `apps/openpen` | The GPUI app: windows, tabs, Home, layers, inspector, toolbar, tools, agent integration. |
-| `apps/openpen-cli` | Headless CLI: `validate`, `migrate`, `render`, `mcp` (shim and headless server). |
+| `apps/openpen-cli` | Headless CLI: `validate`, `migrate`, `render`, `export-code`, `mcp` (shim and headless server). |
 
 ```mermaid
 flowchart LR
@@ -274,6 +284,7 @@ flowchart LR
     render --> canvas
     render --> raster["pen-raster (CPU)"]
     render --> export["pen-export (SVG/PDF)"]
+    layout --> codegen["pen-codegen (HTML/CSS)"]
     layout -. shader fills .-> shader["pen-shader"]
 ```
 
@@ -289,8 +300,9 @@ Measured on Windows 11, release builds (details in the docs listed below):
 | Incremental fill edit | ~15 µs |
 | `execute` inserting 200 nodes in an empty document | ~14 ms |
 | Empty `execute` call (fresh QuickJS runtime) | ~0.44 ms |
+| Animated shader tick on the UI thread (4 animated fills on a 400-item page) | ~0.09 ms; ~2.3 ms per full frame incl. GPU renders |
 
-Sources: [`docs/pen-doc-layout.md`](docs/pen-doc-layout.md), [`docs/pen-canvas.md`](docs/pen-canvas.md), [`docs/pen-script.md`](docs/pen-script.md).
+Sources: [`docs/pen-doc-layout.md`](docs/pen-doc-layout.md), [`docs/pen-canvas.md`](docs/pen-canvas.md), [`docs/pen-script.md`](docs/pen-script.md), [`docs/scripts-shaders.md`](docs/scripts-shaders.md).
 
 ## Project status
 
@@ -305,6 +317,8 @@ OpenPen is young and under active development. Windows is the only platform test
 - [x] Pen tool and vector point editing
 - [x] Procedural `script` nodes and GLSL shaders
 - [x] SVG/PDF/PNG export and the headless CLI
+- [x] HTML/CSS and Tailwind code export (`openpen-cli export-code`, `Export(..., "html-css")`)
+- [x] Animated shaders (`@time`, `@mouse`)
 - [x] MCP server, live agent editing with cursor and flash, headless MCP mode
 - [x] Home screen with recents and previews
 
@@ -314,15 +328,15 @@ OpenPen is young and under active development. Windows is the only platform test
 - [ ] AI image generation (`Generate`) and stock images
 - [ ] Browser import (capture a live web page into a design)
 - [ ] Streaming `execute` (show edits while the agent is still writing the code; the engine already supports it)
-- [ ] Animated shaders
-- [ ] HTML/CSS code export, macOS and Linux builds
+- [ ] macOS and Linux builds
 
 ## Documentation
 
 The design and implementation notes in [`docs/`](docs/) are written in **Portuguese (pt-BR)**. Good starting points:
 [`pen-mcp.md`](docs/pen-mcp.md) (MCP server), [`agent-integration.md`](docs/agent-integration.md) (live agents in the app),
 [`pen-script.md`](docs/pen-script.md) (the `execute` engine), [`pen-canvas.md`](docs/pen-canvas.md) (GPU canvas) and
-[`pen-schema-notes.md`](docs/pen-schema-notes.md) (file format). The agent skill files in [`skills/openpen/`](skills/openpen/) are in English.
+[`pen-schema-notes.md`](docs/pen-schema-notes.md) (file format), [`pen-codegen.md`](docs/pen-codegen.md) (HTML/CSS export)
+and [`scripts-shaders.md`](docs/scripts-shaders.md) (scripts and shaders). The agent skill files in [`skills/openpen/`](skills/openpen/) are in English.
 
 ## Compatibility
 
