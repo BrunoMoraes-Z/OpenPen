@@ -29,6 +29,8 @@ gpui_kit::actions!(
         ConnectAgent,
         ImportWebPage,
         FindLayers,
+        CheckForUpdates,
+        ShowAbout,
         Quit,
         // Edit
         Undo,

@@ -22,6 +22,8 @@ pen-shader.workspace = true
 pen-agent.workspace = true
 # Web page import (docs/web-import.md).
 pen-import.workspace = true
+# Auto-update from GitHub Releases (docs/auto-update.md).
+pen-update.workspace = true
 futures = "0.3"
 # pen-import runs on its own Tokio runtime (web import).
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }

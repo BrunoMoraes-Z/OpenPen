@@ -1,0 +1,68 @@
+# CI: format, clippy and the test suite on Windows (the only platform tested so far).
+# The corpus tests skip (testdata/ is gitignored); the browser tests run against the
+# runner's Edge; the real-Claude and network tests stay off (env-gated).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Smaller debug info keeps the cache and the link step fast; tests do not need it.
+  CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
+  CARGO_INCREMENTAL: "0"
+  # Runners have no GPU (only the WARP software adapter): use the deterministic CPU
+  # shader path. `gpu_matches_cpu` then skips; run it locally on a real GPU.
+  PEN_SHADER_GPU: "0"
+
+jobs:
+  check:
+    name: fmt, clippy, test (windows)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable, MSVC)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci
+          # Only main writes the cache; PRs reuse it.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: cargo fmt
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace --locked
+
+      - name: Upload test outputs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-outputs
+          path: |
+            crates/*/tests/golden/*.actual.*
+            target/pen-import-fidelity/**
+          if-no-files-found: ignore
+          retention-days: 7

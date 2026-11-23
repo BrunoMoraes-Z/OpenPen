@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  OpenPen per-user MSI (WiX 5). Built by installer/build-installer.ps1, which passes:
+    Version     X.Y.Z (MSI ProductVersion)
+    BinDir      folder with openpen.exe and openpen-cli.exe
+    SkillsDir   skills\openpen source folder
+    SkillFiles  ';'-separated file names inside SkillsDir
+    IconFile    assets\icon\openpen.ico
+    LicenseRtf, BannerBmp, DialogBmp  generated UI resources
+  Release contract (do not change without updating docs/release.md and the updater):
+    - UpgradeCode is fixed forever; MajorUpgrade replaces older versions in place.
+    - Per-user, no UAC, installs to %LOCALAPPDATA%\Programs\OpenPen.
+    - LAUNCHAPP=1 starts openpen.exe after a successful install (also with /qn).
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Package Name="OpenPen"
+           Manufacturer="OpenPen"
+           Version="$(var.Version)"
+           UpgradeCode="{C0C4FB78-80F8-4BA5-9B60-159597D3B9FA}"
+           Scope="perUser"
+           Language="1033">
+    <SummaryInformation Description="OpenPen $(var.Version) installer" Manufacturer="OpenPen" />
+
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of [ProductName] is already installed. To install this older version, uninstall the newer one first from Settings &gt; Apps." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!-- Apps & Features entry. -->
+    <Icon Id="openpen.ico" SourceFile="$(var.IconFile)" />
+    <Property Id="ARPPRODUCTICON" Value="openpen.ico" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/BrunoMoraes-Z/OpenPen" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/BrunoMoraes-Z/OpenPen" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/BrunoMoraes-Z/OpenPen/releases/latest" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+    <SetProperty Id="ARPINSTALLLOCATION" Value="[INSTALLFOLDER]" After="CostFinalize" />
+
+    <!-- Public switches: LAUNCHAPP=1 (start the app when done), DESKTOP_SHORTCUT=1, ADD_TO_PATH=1. -->
+    <Property Id="LAUNCHAPP" Secure="yes" />
+    <Property Id="DESKTOP_SHORTCUT" Secure="yes" />
+    <Property Id="ADD_TO_PATH" Secure="yes" />
+
+    <!-- Ask a running app to close (WM_CLOSE) before files are replaced or removed. If it
+         stays open, Windows Installer's files-in-use dialog tells the user (full UI). -->
+    <util:CloseApplication Id="CloseOpenPen" Target="openpen.exe" CloseMessage="yes" RebootPrompt="no" />
+
+    <!-- Directories -->
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsDir" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="OpenPen">
+          <Directory Id="SkillsRootDir" Name="skills">
+            <Directory Id="SkillsDir" Name="openpen" />
+          </Directory>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+    <StandardDirectory Id="DesktopFolder" />
+
+    <!-- Per-user components use an HKCU value as key path (ICE38/ICE43). -->
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="AppBinaries" Guid="{9DEBA4AD-E369-43EF-A638-B8B8DACC7C46}">
+        <RegistryValue Root="HKCU" Key="Software\OpenPen" Name="InstallDir" Type="string" Value="[INSTALLFOLDER]" KeyPath="yes" />
+        <RegistryValue Root="HKCU" Key="Software\OpenPen" Name="Version" Type="string" Value="[ProductVersion]" />
+        <File Id="openpenExe" Source="$(var.BinDir)\openpen.exe" KeyPath="no" />
+        <File Id="openpenCliExe" Source="$(var.BinDir)\openpen-cli.exe" KeyPath="no" />
+        <RemoveFolder Id="RemoveInstallFolder" On="uninstall" />
+        <RemoveFolder Id="RemoveProgramsDir" Directory="ProgramsDir" On="uninstall" />
+      </Component>
+
+      <!-- .pen association (per-user, HKCU\Software\Classes). -->
+      <Component Id="PenFileAssociation">
+        <RegistryValue Root="HKCU" Key="Software\Classes\.pen" Type="string" Value="OpenPen.Design" KeyPath="yes" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\.pen\OpenWithProgids" Name="OpenPen.Design" Type="string" Value="" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\OpenPen.Design" Type="string" Value="OpenPen Design" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\OpenPen.Design" Name="FriendlyTypeName" Type="string" Value="OpenPen Design" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\OpenPen.Design\DefaultIcon" Type="string" Value="&quot;[INSTALLFOLDER]openpen.exe&quot;,0" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\OpenPen.Design\shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]openpen.exe&quot; &quot;%1&quot;" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\Applications\openpen.exe" Name="FriendlyAppName" Type="string" Value="OpenPen" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\Applications\openpen.exe\SupportedTypes" Name=".pen" Type="string" Value="" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="SkillsDir">
+      <Component Id="AgentSkills" Guid="{3B7B648A-F1DB-46C7-8B5C-C40645A56FE7}">
+        <RegistryValue Root="HKCU" Key="Software\OpenPen" Name="SkillsDir" Type="string" Value="[SkillsDir]" KeyPath="yes" />
+<?foreach SkillFile in $(var.SkillFiles)?>
+        <File Source="$(var.SkillsDir)\$(SkillFile)" KeyPath="no" />
+<?endforeach?>
+        <RemoveFolder Id="RemoveSkillsDir" On="uninstall" />
+        <RemoveFolder Id="RemoveSkillsRootDir" Directory="SkillsRootDir" On="uninstall" />
+      </Component>
+    </DirectoryRef>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut">
+        <Shortcut Id="StartMenuOpenPen" Name="OpenPen" Description="OpenPen design editor"
+                  Target="[INSTALLFOLDER]openpen.exe" WorkingDirectory="INSTALLFOLDER" Icon="openpen.ico" />
+        <RegistryValue Root="HKCU" Key="Software\OpenPen" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <StandardDirectory Id="DesktopFolder">
+      <Component Id="DesktopShortcutComponent">
+        <Shortcut Id="DesktopOpenPen" Name="OpenPen" Description="OpenPen design editor"
+                  Target="[INSTALLFOLDER]openpen.exe" WorkingDirectory="INSTALLFOLDER" Icon="openpen.ico" />
+        <RegistryValue Root="HKCU" Key="Software\OpenPen" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="CliOnPath">
+        <Environment Id="PathOpenPen" Name="PATH" Value="[INSTALLFOLDER]" Part="last" Action="set" System="no" Permanent="no" />
+        <RegistryValue Root="HKCU" Key="Software\OpenPen" Name="OnPath" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- Features -->
+    <Feature Id="Main" Title="OpenPen" Description="The OpenPen editor, the openpen-cli tool, the agent skill files, the Start Menu shortcut and the .pen file association."
+             Level="1" AllowAbsent="no" AllowAdvertise="no" Display="expand">
+      <ComponentRef Id="AppBinaries" />
+      <ComponentRef Id="AgentSkills" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="PenFileAssociation" />
+    </Feature>
+    <Feature Id="DesktopShortcut" Title="Desktop shortcut" Description="Adds an OpenPen shortcut to the desktop."
+             Level="1000" AllowAdvertise="no">
+      <Level Value="1" Condition="DESKTOP_SHORTCUT = &quot;1&quot;" />
+      <ComponentRef Id="DesktopShortcutComponent" />
+    </Feature>
+    <Feature Id="AddToPath" Title="Add openpen-cli to PATH" Description="Adds the install folder to your user PATH, so openpen-cli runs from any terminal."
+             Level="1000" AllowAdvertise="no">
+      <Level Value="1" Condition="ADD_TO_PATH = &quot;1&quot;" />
+      <ComponentRef Id="CliOnPath" />
+    </Feature>
+
+    <!-- Launch after install: LAUNCHAPP=1 (any UI level), or the Finish-page checkbox. -->
+    <CustomAction Id="LaunchOpenPen" Directory="INSTALLFOLDER" ExeCommand="&quot;[INSTALLFOLDER]openpen.exe&quot;"
+                  Execute="immediate" Impersonate="yes" Return="asyncNoWait" />
+    <InstallExecuteSequence>
+      <Custom Action="LaunchOpenPen" After="InstallFinalize" Condition="LAUNCHAPP = &quot;1&quot; AND NOT (REMOVE ~= &quot;ALL&quot;)" />
+    </InstallExecuteSequence>
+
+    <!-- UI: welcome, license (MIT), feature tree, progress, finish. -->
+    <ui:WixUI Id="WixUI_FeatureTree" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+    <WixVariable Id="WixUIBannerBmp" Value="$(var.BannerBmp)" />
+    <WixVariable Id="WixUIDialogBmp" Value="$(var.DialogBmp)" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+    <SetProperty Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch OpenPen" Sequence="ui" Before="CostFinalize"
+                 Condition="NOT Installed AND LAUNCHAPP &lt;&gt; &quot;1&quot;" />
+    <UI>
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchOpenPen"
+               Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT AND NOT Installed" />
+    </UI>
+  </Package>
+</Wix>

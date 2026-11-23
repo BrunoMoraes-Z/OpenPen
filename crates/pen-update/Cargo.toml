@@ -1,0 +1,28 @@
+[package]
+name = "pen-update"
+description = "Atualização automática do OpenPen: consulta o GitHub Releases, baixa e verifica o MSI e dispara o instalador"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+semver = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["rt", "time"] }
+# Same HTTP/TLS stack as pen-agent (rustls with ring, no native TLS).
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Registry"] }
+
+[dev-dependencies]
+wiremock = "0.6"
+tokio = { version = "1", features = ["rt", "macros", "time"] }
+
+[lib]
+# rustdoc is not available in this toolchain
+doctest = false

@@ -4891,6 +4891,7 @@ dependencies = [
  "pen-schema",
  "pen-script",
  "pen-shader",
+ "pen-update",
  "serde",
  "serde_json",
  "tokio",
@@ -5269,6 +5270,22 @@ dependencies = [
  "serde_json",
  "smallvec",
  "wgpu",
+]
+
+[[package]]
+name = "pen-update"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "rustls",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+ "tokio",
+ "windows-sys 0.61.2",
+ "wiremock",
 ]
 
 [[package]]

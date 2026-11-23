@@ -337,31 +337,12 @@ impl Workspace {
     }
 
     fn should_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if self.force_close {
+        if self.force_close || !self.tabs.iter().any(|t| t.state.read(cx).is_dirty()) {
             return true;
         }
-        let dirty: Vec<SharedString> = self
-            .tabs
-            .iter()
-            .filter(|t| t.state.read(cx).is_dirty())
-            .map(|t| t.state.read(cx).name.clone())
-            .collect();
-        if dirty.is_empty() {
-            return true;
-        }
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &format!(
-                "{} document(s) have unsaved changes: {}",
-                dirty.len(),
-                dirty.join(", ")
-            ),
-            Some("Quit without saving?"),
-            &["Quit Without Saving", "Cancel"],
-            cx,
-        );
+        let confirm = self.confirm_unsaved("quitting", "Quit", window, cx);
         cx.spawn_in(window, async move |this, cx| {
-            if let Ok(0) = answer.await {
+            if confirm.await {
                 let _ = this.update_in(cx, |this, window, _| {
                     this.force_close = true;
                     window.remove_window();
@@ -370,6 +351,134 @@ impl Workspace {
         })
         .detach();
         false
+    }
+
+    /// The unsaved-changes flow shared by quitting and installing an update:
+    /// lists the unsaved documents and offers Save All / `<verb>` Without
+    /// Saving / Cancel. Resolves to `true` when it is safe to go on (nothing
+    /// unsaved, everything saved, or the user chose to discard); `false` on
+    /// Cancel or when a save failed or its Save As dialog was dismissed.
+    pub fn confirm_unsaved(
+        &mut self,
+        doing: &str,
+        verb: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Task<bool> {
+        let dirty: Vec<SharedString> = self
+            .tabs
+            .iter()
+            .filter(|t| t.state.read(cx).is_dirty())
+            .map(|t| t.state.read(cx).name.clone())
+            .collect();
+        if dirty.is_empty() {
+            return Task::ready(true);
+        }
+        let discard = format!("{verb} Without Saving");
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &format!(
+                "{} document(s) have unsaved changes: {}",
+                dirty.len(),
+                dirty.join(", ")
+            ),
+            Some(&format!("Save them before {doing}?")),
+            &["Save All", discard.as_str(), "Cancel"],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| match answer.await {
+            Ok(0) => {
+                let Ok(task) =
+                    this.update_in(cx, |this, window, cx| this.save_all_dirty(window, cx))
+                else {
+                    return false;
+                };
+                task.await
+            }
+            Ok(1) => true,
+            _ => false,
+        })
+    }
+
+    /// Saves every unsaved document in turn (asking for a path for the
+    /// untitled ones). `false` as soon as one fails or is not given a path.
+    fn save_all_dirty(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Task<bool> {
+        let dirty: Vec<Entity<EditorState>> = self
+            .tabs
+            .iter()
+            .filter(|t| t.state.read(cx).is_dirty())
+            .map(|t| t.state.clone())
+            .collect();
+        cx.spawn_in(window, async move |this, cx| {
+            for state in dirty {
+                // Never write a half-applied agent stream.
+                while state.read_with(cx, |s, _| s.loading || s.doc.stream_lock().is_some()) {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(100))
+                        .await;
+                }
+                let (path, dir, mut suggested) = state.read_with(cx, |s, _| {
+                    let dir = s
+                        .path
+                        .as_ref()
+                        .and_then(|p| p.parent().map(Path::to_path_buf))
+                        .or_else(|| std::env::current_dir().ok())
+                        .unwrap_or_default();
+                    (s.path.clone(), dir, s.name.to_string())
+                });
+                let path = match path {
+                    Some(p) => p,
+                    None => {
+                        if !suggested.ends_with(".pen") {
+                            suggested.push_str(".pen");
+                        }
+                        let Ok(rx) =
+                            this.update(cx, |_, cx| cx.prompt_for_new_path(&dir, Some(&suggested)))
+                        else {
+                            return false;
+                        };
+                        let Ok(Ok(Some(mut p))) = rx.await else {
+                            return false;
+                        };
+                        if p.extension().is_none() {
+                            p.set_extension("pen");
+                        }
+                        state.update(cx, |s, cx| {
+                            s.path = Some(p.clone());
+                            s.name = display_name(&p);
+                            cx.notify();
+                        });
+                        p
+                    }
+                };
+                let Ok(task) = this.update(cx, |this, cx| this.write_doc(&state, path.clone(), cx))
+                else {
+                    return false;
+                };
+                if let Err(e) = task.await {
+                    let _ = this.update_in(cx, |_, window, cx| {
+                        window.push_notification(
+                            format!("Could not save {}: {e}", path.display()),
+                            cx,
+                        )
+                    });
+                    return false;
+                }
+            }
+            let _ = this.update_in(cx, |this, window, cx| this.refresh_title(window, cx));
+            true
+        })
+    }
+
+    /// Quits without asking again (unsaved changes were already handled).
+    pub fn quit_now(&mut self, cx: &mut Context<Self>) {
+        self.force_close = true;
+        cx.quit();
+    }
+
+    /// Keeps a subscription alive as long as the workspace.
+    pub fn keep_subscription(&mut self, sub: Subscription) {
+        self._subs.push(sub);
     }
 
     /// Saves a tab (Save As when it has no path or `save_as`), atomically, on
@@ -885,7 +994,19 @@ impl Workspace {
                 .child(action_btn("goodies", IconName::Gift, "Goodies"))
             })
             .child(crate::agent::ui::agents_pill(&p, cx))
-            .child(action_btn("settings", IconName::Settings, "Settings"))
+            .when_some(crate::update::ui::tab_bar_pill(&p, cx), |d, pill| {
+                d.child(pill)
+            })
+            .child(
+                Self::pill("settings", &p)
+                    .child(Icon::new(IconName::Settings).size(px(14.)))
+                    .tooltip(|w, cx| {
+                        Tooltip::new("Settings")
+                            .action(&OpenSettings, Some(EDITOR_CTX))
+                            .build(w, cx)
+                    })
+                    .on_click(|_, w, cx| crate::update::ui::open_settings(w, cx)),
+            )
             .when(!home_active, |d| {
                 d.child(action_btn("present", IconName::Play, "Present"))
                     .child(
@@ -1056,7 +1177,12 @@ fn app_menu(m: PopupMenu, window: &mut Window, cx: &mut Context<PopupMenu>) -> P
     })
     .submenu("Help", window, cx, |m, _, _| {
         m.menu("Keyboard Shortcuts", Box::new(ShowShortcuts))
-            .item(PopupMenuItem::new("About OpenPen"))
+            .separator()
+            .menu("Check for Updates…", Box::new(CheckForUpdates))
+            .menu("About OpenPen", Box::new(ShowAbout))
+            .item(
+                PopupMenuItem::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).disabled(true),
+            )
     })
     .separator()
     .menu("Quit", Box::new(Quit))
@@ -1078,6 +1204,9 @@ fn app_menu_button(p: &Palette) -> Div {
 pub fn set_app_menus(cx: &mut App) {
     cx.set_menus([
         Menu::new("OpenPen").items([
+            MenuItem::action("About OpenPen", ShowAbout),
+            MenuItem::action("Check for Updates…", CheckForUpdates),
+            MenuItem::separator(),
             MenuItem::action("Settings…", OpenSettings),
             MenuItem::action("Connect an AI agent…", ConnectAgent),
             MenuItem::separator(),
@@ -1148,7 +1277,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|t, _: &OpenFile, w, cx| t.open_dialog(w, cx)))
             // `.pen` files dropped anywhere on the window open in tabs.
             .on_drop(cx.listener(|t, paths: &ExternalPaths, w, cx| t.open_dropped(paths, w, cx)))
-            .on_action(|_: &OpenSettings, w, cx| Self::not_yet("Settings", w, cx))
+            .on_action(|_: &OpenSettings, w, cx| crate::update::ui::open_settings(w, cx))
+            .on_action(|_: &CheckForUpdates, _, cx| crate::update::check_now(cx))
+            .on_action(|_: &ShowAbout, w, cx| crate::update::ui::open_about(w, cx))
             .on_action(|_: &CommandPalette, w, cx| Self::not_yet("The command palette", w, cx))
             .on_action(|_: &ShowShortcuts, w, cx| Self::not_yet("The shortcuts dialog", w, cx))
             .on_action(|_: &ShowChat, w, cx| {
@@ -1164,5 +1295,6 @@ impl Render for Workspace {
             }))
             .child(div().absolute().inset_0().child(body))
             .child(self.render_tab_bar(window, cx))
+            .children(crate::update::ui::banner(&p, cx))
     }
 }

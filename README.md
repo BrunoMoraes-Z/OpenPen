@@ -6,8 +6,10 @@
 
 **A native, GPU-accelerated design editor for `.pen` files, built in Rust and made to be driven by AI agents.**
 
+[![CI](https://github.com/BrunoMoraes-Z/OpenPen/actions/workflows/ci.yml/badge.svg)](https://github.com/BrunoMoraes-Z/OpenPen/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/BrunoMoraes-Z/OpenPen?logo=github)](https://github.com/BrunoMoraes-Z/OpenPen/releases/latest)
 [![Rust](https://img.shields.io/badge/Rust-2024_edition-orange?logo=rust)](https://www.rust-lang.org/)
-[![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows)](#build-from-source)
+[![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows)](#install)
 [![UI](https://img.shields.io/badge/UI-GPUI-6E56CF)](https://www.gpui.rs/)
 [![MCP](https://img.shields.io/badge/MCP-ready-1f6feb)](#use-with-claude-code)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -87,6 +89,9 @@ Also included:
   page as one frame of editable layers, with its images and fonts saved next to the `.pen`. Agents get the same through the
   `import_website` MCP tool (also in `openpen-cli mcp --headless`). The browser always runs with a fresh temporary profile
   that is deleted afterwards, so your cookies and sessions are never used. Details: [`docs/web-import.md`](docs/web-import.md).
+- Updates: OpenPen checks GitHub Releases at most once a day (☰ › Help › Check for Updates… does it on demand). MSI installs
+  update with one click ("Install and restart", SHA-256 verified); portable copies open the release page. The only network
+  call is to GitHub, with no telemetry, and Settings › Updates turns automatic checks off. Details: [`docs/auto-update.md`](docs/auto-update.md).
 
 ## Use with Claude Code
 
@@ -216,6 +221,29 @@ TakeScreenshot([login]);
 
 `login` (no `const`) persists for the agent's next call. The full guide the agent reads is in
 [`skills/openpen/`](skills/openpen/SKILL.md).
+
+## Install
+
+Download the latest Windows x64 build from **[Releases](https://github.com/BrunoMoraes-Z/OpenPen/releases/latest)**:
+
+- **`OpenPen-X.Y.Z-x64.msi`**: the installer. It installs for your user only (no admin rights) into
+  `%LOCALAPPDATA%\Programs\OpenPen`, adds a Start Menu shortcut, opens `.pen` files with OpenPen, and lists
+  OpenPen in Settings › Apps for uninstalling. Optional: a desktop shortcut and "Add openpen-cli to PATH".
+  A newer MSI upgrades the installed version in place. Silent install:
+  `msiexec /i OpenPen-X.Y.Z-x64.msi /qn` (add `ADD_TO_PATH=1`, `DESKTOP_SHORTCUT=1` or `LAUNCHAPP=1` if wanted).
+- **`OpenPen-X.Y.Z-x64-portable.zip`**: the same files without installing. Unzip anywhere and run `openpen.exe`;
+  keep the `skills` folder next to the executables.
+- **`OpenPen-X.Y.Z-x64.msi.sha256`**: the SHA-256 of the MSI (`(Get-FileHash OpenPen-X.Y.Z-x64.msi).Hash`).
+
+The binaries are not code-signed yet, so Windows SmartScreen may warn on first run ("More info" › "Run anyway").
+
+After installing with the MSI, register the MCP server with:
+
+```powershell
+claude mcp add --scope user openpen -- "$env:LOCALAPPDATA\Programs\OpenPen\openpen-cli.exe" mcp
+```
+
+How releases are made: [`docs/release.md`](docs/release.md) (pt-BR).
 
 ## Build from source
 

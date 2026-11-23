@@ -1,0 +1,194 @@
+{
+  "version": "2.22",
+  "children": [
+    {
+      "type": "frame",
+      "id": "dialog",
+      "name": "WixUI dialog (493x312)",
+      "x": 0,
+      "y": 0,
+      "width": 493,
+      "height": 312,
+      "layout": "none",
+      "fill": "#FFFFFF",
+      "children": [
+        {
+          "type": "rectangle",
+          "id": "dlgPanel",
+          "name": "Side panel",
+          "x": 0,
+          "y": 0,
+          "width": 164,
+          "height": 312,
+          "fill": {
+            "type": "gradient",
+            "gradientType": "linear",
+            "rotation": 180,
+            "colors": [
+              { "color": "#312E81", "position": 0 },
+              { "color": "#1E1B4B", "position": 1 }
+            ]
+          }
+        },
+        {
+          "type": "frame",
+          "id": "dlgIcon",
+          "name": "Icon",
+          "x": 34,
+          "y": 70,
+          "width": 96,
+          "height": 96,
+          "layout": "none",
+          "cornerRadius": 21.75,
+          "clip": true,
+          "fill": {
+            "type": "gradient",
+            "gradientType": "linear",
+            "rotation": 225,
+            "colors": [
+              { "color": "#A78BFA", "position": 0 },
+              { "color": "#7C3AED", "position": 0.5 },
+              { "color": "#3730A3", "position": 1 }
+            ]
+          },
+          "children": [
+            {
+              "type": "ellipse",
+              "id": "dlgGlow",
+              "name": "Glow",
+              "x": -20.625,
+              "y": -24.375,
+              "width": 84.375,
+              "height": 76.875,
+              "fill": {
+                "type": "gradient",
+                "gradientType": "radial",
+                "colors": [
+                  { "color": "#FFFFFF33", "position": 0 },
+                  { "color": "#FFFFFF00", "position": 1 }
+                ]
+              }
+            },
+            {
+              "type": "path",
+              "id": "dlgNib",
+              "name": "Nib",
+              "x": 51.656,
+              "y": 18.281,
+              "rotation": -45,
+              "width": 37.5,
+              "height": 52.5,
+              "viewBox": [0, 0, 400, 560],
+              "geometry": "M200 0 C262 0 318 42 338 112 L400 300 C332 382 262 470 200 560 C138 470 68 382 0 300 L62 112 C82 42 138 0 200 0 Z M234 262 A34 34 0 1 0 166 262 A34 34 0 1 0 234 262 Z M193 296 L207 296 L203 520 L197 520 Z",
+              "fillRule": "evenodd",
+              "fill": "#FFFFFF",
+              "effect": {
+                "type": "shadow",
+                "offset": { "x": 0, "y": 2.25 },
+                "blur": 4.5,
+                "color": "#1E1B4B66"
+              }
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "dlgTitle",
+          "name": "Title",
+          "x": 0,
+          "y": 184,
+          "width": 164,
+          "textGrowth": "fixed-width",
+          "textAlign": "center",
+          "content": "OpenPen",
+          "fontFamily": "Inter",
+          "fontSize": 22,
+          "fontWeight": "700",
+          "fill": "#FFFFFF"
+        },
+        {
+          "type": "text",
+          "id": "dlgTagline",
+          "name": "Tagline",
+          "x": 0,
+          "y": 216,
+          "width": 164,
+          "textGrowth": "fixed-width",
+          "textAlign": "center",
+          "content": "Design editor",
+          "fontFamily": "Inter",
+          "fontSize": 12,
+          "fill": "#C4B5FD"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "banner",
+      "name": "WixUI banner (493x58)",
+      "x": 0,
+      "y": 400,
+      "width": 493,
+      "height": 58,
+      "layout": "none",
+      "fill": "#FFFFFF",
+      "children": [
+        {
+          "type": "frame",
+          "id": "bnIcon",
+          "name": "Icon",
+          "x": 441,
+          "y": 9,
+          "width": 40,
+          "height": 40,
+          "layout": "none",
+          "cornerRadius": 9.0625,
+          "clip": true,
+          "fill": {
+            "type": "gradient",
+            "gradientType": "linear",
+            "rotation": 225,
+            "colors": [
+              { "color": "#A78BFA", "position": 0 },
+              { "color": "#7C3AED", "position": 0.5 },
+              { "color": "#3730A3", "position": 1 }
+            ]
+          },
+          "children": [
+            {
+              "type": "ellipse",
+              "id": "bnGlow",
+              "name": "Glow",
+              "x": -8.594,
+              "y": -10.156,
+              "width": 35.156,
+              "height": 32.031,
+              "fill": {
+                "type": "gradient",
+                "gradientType": "radial",
+                "colors": [
+                  { "color": "#FFFFFF33", "position": 0 },
+                  { "color": "#FFFFFF00", "position": 1 }
+                ]
+              }
+            },
+            {
+              "type": "path",
+              "id": "bnNib",
+              "name": "Nib",
+              "x": 21.523,
+              "y": 7.617,
+              "rotation": -45,
+              "width": 15.625,
+              "height": 21.875,
+              "viewBox": [0, 0, 400, 560],
+              "geometry": "M200 0 C262 0 318 42 338 112 L400 300 C332 382 262 470 200 560 C138 470 68 382 0 300 L62 112 C82 42 138 0 200 0 Z M234 262 A34 34 0 1 0 166 262 A34 34 0 1 0 234 262 Z M193 296 L207 296 L203 520 L197 520 Z",
+              "fillRule": "evenodd",
+              "fill": "#FFFFFF"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

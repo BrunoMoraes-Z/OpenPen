@@ -32,6 +32,7 @@ pub mod theme;
 pub mod toolbar;
 pub mod tools;
 pub mod ui;
+pub mod update;
 pub mod web_import;
 pub mod workspace;
 pub mod zoom;
@@ -73,6 +74,8 @@ pub fn run() {
             .expect("open window");
             // MCP server for external agents (docs/agent-integration.md).
             agent::hub::start(handle, workspace.downgrade(), cx);
+            // Update check, 10 s after startup (docs/auto-update.md).
+            update::init(handle, cx);
             let main_id = handle.window_id();
             cx.on_window_closed(move |cx, id| {
                 if id == main_id {

@@ -1,0 +1,88 @@
+{
+  "url": "https://api.github.com/repos/BrunoMoraes-Z/OpenPen/releases/200",
+  "assets_url": "https://api.github.com/repos/BrunoMoraes-Z/OpenPen/releases/200/assets",
+  "upload_url": "https://uploads.github.com/repos/BrunoMoraes-Z/OpenPen/releases/200/assets{?name,label}",
+  "html_url": "https://github.com/BrunoMoraes-Z/OpenPen/releases/tag/v0.2.0",
+  "id": 200,
+  "author": {
+    "login": "github-actions[bot]",
+    "id": 41898282,
+    "type": "Bot",
+    "site_admin": false
+  },
+  "node_id": "RE_kwDO200",
+  "tag_name": "v0.2.0",
+  "target_commitish": "main",
+  "name": "OpenPen 0.2.0",
+  "draft": false,
+  "immutable": false,
+  "prerelease": false,
+  "created_at": "2026-12-01T11:50:00Z",
+  "updated_at": "2026-12-01T12:00:00Z",
+  "published_at": "2026-12-01T12:00:00Z",
+  "assets": [
+    {
+      "url": "https://api.github.com/repos/BrunoMoraes-Z/OpenPen/releases/assets/2001",
+      "id": 2001,
+      "node_id": "RA_kwDO2001",
+      "name": "OpenPen-0.2.0-x64.msi",
+      "label": "",
+      "uploader": {
+        "login": "github-actions[bot]",
+        "id": 41898282,
+        "type": "Bot",
+        "site_admin": false
+      },
+      "content_type": "application/x-msi",
+      "state": "uploaded",
+      "size": 18874368,
+      "download_count": 0,
+      "created_at": "2026-12-01T11:58:00Z",
+      "updated_at": "2026-12-01T11:59:00Z",
+      "browser_download_url": "https://github.com/BrunoMoraes-Z/OpenPen/releases/download/v0.2.0/OpenPen-0.2.0-x64.msi"
+    },
+    {
+      "url": "https://api.github.com/repos/BrunoMoraes-Z/OpenPen/releases/assets/2002",
+      "id": 2002,
+      "node_id": "RA_kwDO2002",
+      "name": "OpenPen-0.2.0-x64.msi.sha256",
+      "label": "",
+      "uploader": {
+        "login": "github-actions[bot]",
+        "id": 41898282,
+        "type": "Bot",
+        "site_admin": false
+      },
+      "content_type": "text/plain",
+      "state": "uploaded",
+      "size": 88,
+      "download_count": 0,
+      "created_at": "2026-12-01T11:58:00Z",
+      "updated_at": "2026-12-01T11:59:00Z",
+      "browser_download_url": "https://github.com/BrunoMoraes-Z/OpenPen/releases/download/v0.2.0/OpenPen-0.2.0-x64.msi.sha256"
+    },
+    {
+      "url": "https://api.github.com/repos/BrunoMoraes-Z/OpenPen/releases/assets/2003",
+      "id": 2003,
+      "node_id": "RA_kwDO2003",
+      "name": "OpenPen-0.2.0-x64-portable.zip",
+      "label": "",
+      "uploader": {
+        "login": "github-actions[bot]",
+        "id": 41898282,
+        "type": "Bot",
+        "site_admin": false
+      },
+      "content_type": "application/zip",
+      "state": "uploaded",
+      "size": 20971520,
+      "download_count": 0,
+      "created_at": "2026-12-01T11:58:00Z",
+      "updated_at": "2026-12-01T11:59:00Z",
+      "browser_download_url": "https://github.com/BrunoMoraes-Z/OpenPen/releases/download/v0.2.0/OpenPen-0.2.0-x64-portable.zip"
+    }
+  ],
+  "tarball_url": "https://api.github.com/repos/BrunoMoraes-Z/OpenPen/tarball/v0.2.0",
+  "zipball_url": "https://api.github.com/repos/BrunoMoraes-Z/OpenPen/zipball/v0.2.0",
+  "body": "## What's new\n\n- Auto-update from GitHub Releases.\n- Faster canvas.\n\n**Full Changelog**: https://github.com/BrunoMoraes-Z/OpenPen/compare/v0.1.0...v0.2.0"
+}
