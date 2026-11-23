@@ -5,7 +5,8 @@ fn bin() -> Command {
 }
 
 fn tmp(name: &str, content: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("openpen-cli-test-{}", std::process::id()));
+    // Under target/ (reused across runs) instead of a new %TEMP% folder per run.
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("openpen-cli-test");
     std::fs::create_dir_all(&dir).unwrap();
     let p = dir.join(name);
     std::fs::write(&p, content).unwrap();

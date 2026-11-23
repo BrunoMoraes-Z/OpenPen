@@ -78,7 +78,8 @@ mod tests {
     }
 
     fn tmp_pen(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("openpen-route-{}", std::process::id()));
+        // Fixed name: reused across runs instead of one leftover folder per process.
+        let dir = std::env::temp_dir().join("openpen-route-tests");
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join(name);
         std::fs::write(&p, "{}").unwrap();
