@@ -36,7 +36,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust (stable, MSVC)
         uses: dtolnay/rust-toolchain@stable
@@ -89,7 +89,7 @@ jobs:
         run: ./scripts/package.ps1 -Version ${{ steps.version.outputs.version }} -BinDir target/release -OutDir dist
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: OpenPen-${{ steps.version.outputs.version }}-x64
           path: |
@@ -107,7 +107,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: OpenPen-${{ needs.build.outputs.version }}-x64
           path: dist
