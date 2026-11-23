@@ -17,23 +17,25 @@ use crate::vars::{ThemeId, Themes, VarCache, VarCx, VarVal};
 /// reachable through `children`.
 pub type PathIndex = HashMap<Box<str>, SmallVec<[u32; 8]>>;
 
-pub fn index_doc(doc: &Document) -> PathIndex {
-    fn walk(n: &Node, path: &mut SmallVec<[u32; 8]>, out: &mut PathIndex) {
-        if let Some(id) = &n.id {
-            out.entry(id.as_str().into())
-                .or_insert_with(|| path.clone());
-        }
-        for (i, c) in n.children_slice().iter().enumerate() {
-            path.push(i as u32);
-            walk(c, path, out);
-            path.pop();
-        }
+/// Adds `n` (at `path`) and its subtree to an index (first occurrence of an id wins).
+pub(crate) fn index_subtree(n: &Node, path: &mut SmallVec<[u32; 8]>, out: &mut PathIndex) {
+    if let Some(id) = &n.id {
+        out.entry(id.as_str().into())
+            .or_insert_with(|| path.clone());
     }
+    for (i, c) in n.children_slice().iter().enumerate() {
+        path.push(i as u32);
+        index_subtree(c, path, out);
+        path.pop();
+    }
+}
+
+pub fn index_doc(doc: &Document) -> PathIndex {
     let mut out = PathIndex::with_capacity(doc.node_count());
     let mut path = SmallVec::new();
     for (i, c) in doc.children_slice().iter().enumerate() {
         path.push(i as u32);
-        walk(c, &mut path, &mut out);
+        index_subtree(c, &mut path, &mut out);
         path.pop();
     }
     out

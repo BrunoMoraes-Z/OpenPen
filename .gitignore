@@ -6,5 +6,6 @@
 /testdata/user/
 # saídas de testes golden
 **/*.actual.png
+**/*.actual.svg
 # screenshots mostram designs pessoais de testdata/user
 /docs/screenshots/

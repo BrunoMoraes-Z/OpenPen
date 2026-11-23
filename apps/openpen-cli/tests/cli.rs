@@ -89,3 +89,63 @@ fn render_node_to_png() {
         .unwrap();
     assert!(!missing.success());
 }
+
+#[test]
+fn render_svg_and_pdf() {
+    let doc = tmp(
+        "vector.pen",
+        r##"{"version": "2.22", "children": [
+          {"type": "frame", "id": "f", "x": 0, "y": 0, "width": 40, "height": 20, "fill": "#ffffff",
+           "children": [{"type": "text", "id": "t", "content": "Hi", "fill": "#000000", "fontSize": 12}]}
+        ]}"##,
+    );
+    let svg = doc.with_file_name("vector.svg");
+    let status = bin()
+        .arg("render")
+        .arg(&doc)
+        .arg("-o")
+        .arg(&svg)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let text = std::fs::read_to_string(&svg).unwrap();
+    assert!(text.starts_with("<svg") || text.starts_with("<?xml"));
+    assert!(text.contains("<text"));
+
+    let outlined = doc.with_file_name("vector-outline.svg");
+    let status = bin()
+        .arg("render")
+        .arg(&doc)
+        .arg("-o")
+        .arg(&outlined)
+        .arg("--outline")
+        .status()
+        .unwrap();
+    assert!(status.success());
+    assert!(
+        !std::fs::read_to_string(&outlined)
+            .unwrap()
+            .contains("<text")
+    );
+
+    let pdf = doc.with_file_name("vector.pdf");
+    let status = bin()
+        .arg("render")
+        .arg(&doc)
+        .arg("-o")
+        .arg(&pdf)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    assert_eq!(&std::fs::read(&pdf).unwrap()[..5], b"%PDF-");
+
+    let bad = doc.with_file_name("vector.bmp");
+    let status = bin()
+        .arg("render")
+        .arg(&doc)
+        .arg("-o")
+        .arg(&bad)
+        .status()
+        .unwrap();
+    assert!(!status.success());
+}

@@ -417,6 +417,87 @@ fn set_variable_and_clear() {
 }
 
 #[test]
+fn appended_subtree_is_indexed() {
+    let mut s = scene(COMPONENTS);
+    let doc = doc(r#"{"version": "2.22", "children": [
+        {"type": "frame", "id": "nf", "children": [{"type": "frame", "id": "nc", "children": [
+            {"type": "rectangle", "id": "nr"}]}]}]}"#);
+    let node = doc.children_slice()[0].clone();
+    s.apply(DocOp::Insert {
+        parent: None,
+        index: usize::MAX,
+        node: Box::new(node),
+    })
+    .unwrap();
+    let n = s.document().children_slice().len();
+    assert_eq!(s.schema_position("nf"), Some((None, n - 1)));
+    assert_eq!(s.schema_position("nr"), Some((Some("nc".into()), 0)));
+    let mut r = Node::new(pen_schema::NodeKind::Rectangle, "nr2");
+    r.width = Some(Sizing::Fixed(1.0));
+    s.apply(DocOp::Insert {
+        parent: Some("nc".into()),
+        index: usize::MAX,
+        node: Box::new(r),
+    })
+    .unwrap();
+    assert_eq!(s.schema_position("nr2"), Some((Some("nc".into()), 1)));
+    assert!(s.find("nr2").is_some());
+    // Inserting in the middle shifts siblings (index rebuilt).
+    let r = Node::new(pen_schema::NodeKind::Rectangle, "nr0");
+    s.apply(DocOp::Insert {
+        parent: Some("nc".into()),
+        index: 0,
+        node: Box::new(r),
+    })
+    .unwrap();
+    assert_eq!(s.schema_position("nr2"), Some((Some("nc".into()), 2)));
+}
+
+#[test]
+fn record_applied_ops_as_one_step() {
+    let mut s = scene(COMPONENTS);
+    let before = s.save();
+    let inverses = vec![
+        s.apply(DocOp::set(NodeRef::id("i1"), fill("#00ff00")))
+            .unwrap(),
+        s.apply(DocOp::Delete { id: "i3".into() }).unwrap(),
+    ];
+    let mut undo = UndoStack::new();
+    undo.record(inverses);
+    assert_eq!(undo.undo_len(), 1);
+    assert!(undo.undo(&mut s).unwrap());
+    assert_eq!(s.save(), before);
+    assert!(undo.redo(&mut s).unwrap());
+    assert!(s.find("i3").is_none());
+}
+
+#[test]
+fn replace_variables_swaps_maps() {
+    let mut s = scene(THEMED);
+    let before = s.save();
+    let mut vars = s.document().variables.clone().unwrap_or_default();
+    vars.shift_remove("gap");
+    let mut themes = s.document().themes.clone().unwrap_or_default();
+    themes.insert("density".into(), vec!["normal".into(), "compact".into()]);
+    let inv = s
+        .apply(DocOp::ReplaceVariables {
+            variables: Some(Box::new(vars)),
+            themes: Some(Box::new(themes)),
+        })
+        .unwrap();
+    assert_eq!(s.get(s.find("light").unwrap()).unwrap().layout.gap, 0.0);
+    assert!(
+        s.document()
+            .themes
+            .as_ref()
+            .unwrap()
+            .contains_key("density")
+    );
+    s.apply(inv).unwrap();
+    assert_eq!(s.save(), before);
+}
+
+#[test]
 fn save_keeps_line_endings_and_trailing_newline() {
     let lf = "{\n  \"version\": \"2.22\",\n  \"children\": [\n    {\n      \"type\": \"rectangle\",\n      \"id\": \"r\"\n    }\n  ]\n}";
     for src in [

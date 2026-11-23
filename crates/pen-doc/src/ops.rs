@@ -6,6 +6,7 @@
 //! rebuilds the affected top-level subtrees (including every root that
 //! instantiates an edited component). Applying an op returns its inverse.
 
+use indexmap::IndexMap;
 use pen_render::NodeKey;
 use pen_schema::{Node, NodeField, Variable};
 use smallvec::SmallVec;
@@ -65,6 +66,13 @@ pub enum DocOp {
         name: Arc<str>,
         value: Option<Box<Variable>>,
         index: Option<usize>,
+    },
+    /// Replace the whole `variables` and `themes` maps of the document
+    /// (`None` = remove the key). Self-inverse: applying it swaps the maps.
+    /// One rebuild for any number of variable/theme changes.
+    ReplaceVariables {
+        variables: Option<Box<IndexMap<String, Variable>>>,
+        themes: Option<Box<IndexMap<String, Vec<String>>>>,
     },
 }
 
@@ -207,6 +215,16 @@ impl SceneDoc {
                     name,
                     value: old.map(Box::new),
                     index: old_index,
+                })
+            }
+            DocOp::ReplaceVariables { variables, themes } => {
+                let doc = &mut self.data.doc;
+                let old_vars = std::mem::replace(&mut doc.variables, variables.map(|v| *v));
+                let old_themes = std::mem::replace(&mut doc.themes, themes.map(|t| *t));
+                self.rebuild_all();
+                Ok(DocOp::ReplaceVariables {
+                    variables: old_vars.map(Box::new),
+                    themes: old_themes.map(Box::new),
                 })
             }
         }
@@ -374,16 +392,27 @@ impl SceneDoc {
         if let Some(d) = dup {
             return Err(OpError::DuplicateId(d));
         }
+        let mut path: SmallVec<[u32; 8]> = SmallVec::new();
         if let Some(pid) = parent.as_deref() {
-            let p = self.path_of(pid)?;
-            affected.extend(self.affected_roots(&p));
+            path = self.path_of(pid)?;
+            affected.extend(self.affected_roots(&path));
         }
         affected.sort();
         affected.dedup();
         let list = self.children_of_mut(parent.as_deref())?;
         let index = index.min(list.len());
+        let appended = index == list.len();
         list.insert(index, *node);
-        self.data.index_stale = true;
+        if appended && !self.data.index_stale {
+            // Appending moves no existing node: index just the new subtree.
+            path.push(index as u32);
+            let crate::scene::Data { doc, doc_index, .. } = &mut self.data;
+            if let Some(n) = node_at(doc, &path) {
+                crate::scene::index_subtree(n, &mut path, doc_index);
+            }
+        } else {
+            self.data.index_stale = true;
+        }
         if parent.is_none() {
             self.insert_root(index);
         }

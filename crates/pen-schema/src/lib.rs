@@ -30,8 +30,8 @@ pub use document::{
 pub use id::{IdGenerator, is_valid_id, new_id};
 pub use load::{
     LineEnding, LoadError, LoadOptions, LoadReport, SaveOptions, document_from_value,
-    document_to_value, load_document, load_document_with, load_value_with, parse_json,
-    save_document, save_document_to, save_document_with,
+    document_to_value, load_document, load_document_with, load_value_with, node_from_value,
+    parse_json, save_document, save_document_to, save_document_with, variable_from_value,
 };
 pub use migrate::{AppliedMigration, MIGRATIONS, MigrateCx, MigrateError, Migration, migrate};
 pub use node::{

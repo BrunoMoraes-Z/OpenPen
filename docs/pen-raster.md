@@ -12,6 +12,8 @@ let png = ctx.render_to_png(&list, viewport, scale, bg)?;
 // Atalhos com um contexto global compartilhado (protegido por mutex):
 pen_raster::render(&list, viewport, scale, bg);
 pen_raster::render_to_png(&list, viewport, scale, bg)?;
+// Contornos vetoriais do texto (mesmo shaping/fontes do render), usados pelo pen-export:
+let outlines: Vec<pen_raster::TextOutline> = ctx.text_outlines(&block); // (run, Path) em espaço local
 ```
 
 As fontes seguem a mesma política do pen-layout (`pen_fonts::system::LazyFonts`): o banco começa só com a Inter, cada família citada é copiada do catálogo do sistema (escaneado uma vez por processo) na primeira vez que aparece, e um glifo faltando carrega os fallbacks da plataforma e, depois, todas as faces. `with_font_system(fs)` usa só o banco dado.

@@ -39,7 +39,9 @@ std::fs::write(path, scene.save())?;     // save sem perda, com o fim de linha d
 - **Variáveis/temas**: temas efetivos internados (`ThemeId`), herdados e sobrescritos por `theme` do nó; valor
   temático = último que casa (regra do legado). `set_theme(eixo, valor)` muda o tema da raiz.
 - **Ops**: `SetFields` (máscara de `NodeField` + valores; é a própria inversa: troca valores), `Insert`,
-  `Delete`, `Move`, `Reorder`, `SetVariable`. Para `NodeRef::Override`, a entrada de `descendants` é criada
+  `Delete`, `Move`, `Reorder`, `SetVariable`, `ReplaceVariables` (troca `variables` e `themes` inteiros,
+  um rebuild). `UndoStack::record(inversas)` registra como um passo ops aplicadas direto na cena
+  (usado pelo pen-script). Insert no fim da lista atualiza o índice de caminhos sem reindexar. Para `NodeRef::Override`, a entrada de `descendants` é criada
   sob demanda e removida quando fica vazia. Edição de propriedade de nó comum: re-resolve só o nó
   (`Dirty::PAINT` ou `LAYOUT`); o resto reconstrói a raiz de topo afetada e todas as raízes que expandem o
   componente editado (`uses`), **reaproveitando as chaves** pelo id path.

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" width="96" height="64" viewBox="0 0 96 64">
+<rect x="0" y="0" width="96" height="64" fill="#ffffff"/>
+<g transform="translate(6 6)"><path d="M0 0H32A8 8 0 0 1 40 8V32A20 20 0 0 1 20 52H4A4 4 0 0 1 0 48V0Z" fill="#1e8c5a"/></g>
+<g transform="translate(52 6)"><rect width="38" height="24" rx="12" fill="#c8641e"/></g>
+</svg>

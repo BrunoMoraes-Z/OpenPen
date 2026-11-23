@@ -257,6 +257,11 @@ const FALLBACK: &[&str] = &[
     "Noto Sans Symbols2",
 ];
 
+/// Platform families tried first for characters the document's fonts do not cover.
+pub fn fallback_families() -> &'static [&'static str] {
+    FALLBACK
+}
+
 /// How a family name resolved (see [`LazyFonts::resolve`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FamilyMatch {

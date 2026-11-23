@@ -6,7 +6,7 @@ use std::io;
 use serde_json::Value;
 
 use crate::diag::{DiagCode, Diagnostic};
-use crate::document::{CURRENT_VERSION, Document};
+use crate::document::{CURRENT_VERSION, Document, Variable};
 use crate::id::IdGenerator;
 use crate::json::{strip_jsonc_comments, to_js_pretty};
 use crate::migrate::{AppliedMigration, MigrateCx, MigrateError, migrate};
@@ -203,6 +203,33 @@ pub fn document_from_value(value: Value) -> (Document, Vec<Diagnostic>) {
     };
     cx.flush_issues(0, "");
     (doc, cx.diags)
+}
+
+/// Typed conversion of one node value (a node of the current version, or a
+/// `descendants` patch). Invalid values are kept in `extra` and reported, located
+/// at the node id (or `location` when the node has none).
+pub fn node_from_value(value: Value, location: &str) -> (Node, Vec<Diagnostic>) {
+    let mut cx = Cx::default();
+    let node = if Node::accepts(&value) {
+        Node::convert(value, &mut cx)
+    } else {
+        Node::default()
+    };
+    cx.flush_issues(0, location);
+    (node, cx.diags)
+}
+
+/// Typed conversion of one variable definition (`{type, value}`). Invalid values
+/// are kept in `extra` and reported at `variables.<name>`.
+pub fn variable_from_value(name: &str, value: Value) -> (Variable, Vec<Diagnostic>) {
+    let mut cx = Cx::default();
+    let var = if Variable::accepts(&value) {
+        Variable::convert(value, &mut cx)
+    } else {
+        Variable::default()
+    };
+    cx.flush_issues(0, &format!("variables.{name}"));
+    (var, cx.diags)
 }
 
 /// Serializes like the legacy app (`JSON.stringify(doc, null, 2)`, no trailing newline).

@@ -375,6 +375,11 @@ macro_rules! pen_object {
                 match f { $($fenum::$field => std::mem::swap(&mut self.$field, &mut other.$field)),* }
             }
 
+            /// Sets one field to a clone of `other`'s value (absent = removed).
+            pub fn clone_field_from(&mut self, other: &Self, f: $fenum) {
+                match f { $($fenum::$field => self.$field = other.$field.clone()),* }
+            }
+
             /// Bit set (by `$fenum::bit`) of present fields.
             pub fn present_mask(&self) -> u128 {
                 let mut m = 0u128;

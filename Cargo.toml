@@ -8,6 +8,9 @@ members = [
     "crates/pen-render",
     "crates/pen-raster",
     "crates/pen-canvas",
+    "crates/pen-export",
+    "crates/pen-script",
+    "crates/pen-mcp",
     "apps/openpen",
     "apps/openpen-cli",
 ]
@@ -26,6 +29,9 @@ pen-layout = { path = "crates/pen-layout" }
 pen-render = { path = "crates/pen-render" }
 pen-raster = { path = "crates/pen-raster" }
 pen-canvas = { path = "crates/pen-canvas" }
+pen-export = { path = "crates/pen-export" }
+pen-script = { path = "crates/pen-script" }
+pen-mcp = { path = "crates/pen-mcp" }
 
 anyhow = "1"
 thiserror = "2"

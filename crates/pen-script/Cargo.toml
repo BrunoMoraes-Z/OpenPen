@@ -1,0 +1,29 @@
+[package]
+name = "pen-script"
+description = "Motor do `execute` (MCP): JavaScript em QuickJS contra o documento, em uma transação"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pen-schema.workspace = true
+pen-doc.workspace = true
+pen-layout.workspace = true
+pen-render.workspace = true
+pen-raster.workspace = true
+serde_json.workspace = true
+indexmap.workspace = true
+image.workspace = true
+rquickjs = { version = "0.14", features = ["parallel"] }
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+
+[lib]
+# rustdoc is not available in this toolchain
+doctest = false
+
+[[bench]]
+name = "execute"
+harness = false

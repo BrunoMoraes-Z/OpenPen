@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" width="96" height="64" viewBox="0 0 96 64">
+<defs>
+<clipPath id="c1" clipPathUnits="userSpaceOnUse"><rect width="80" height="48" rx="14" transform="translate(8 8)"/></clipPath>
+<clipPath id="c2" clipPathUnits="userSpaceOnUse" clip-path="url(#c1)"><ellipse cx="35" cy="35" rx="35" ry="35" transform="translate(30 4)"/></clipPath>
+</defs>
+<rect x="0" y="0" width="96" height="64" fill="#ffffff"/>
+<g clip-path="url(#c1)"><rect width="96" height="64" fill="#3c3c5a"/></g>
+<g clip-path="url(#c2)"><rect width="96" height="32" fill="#ffa000"/></g>
+<g clip-path="url(#c2)"><g transform="translate(0 32)"><rect width="96" height="32" fill="#00c8a0"/></g></g>
+<g clip-path="url(#c1)"><g transform="translate(0 28)"><rect width="96" height="8" fill="#ffffff" fill-opacity="0.8"/></g></g>
+<g transform="translate(0 58)"><rect width="96" height="6" fill="#c80000"/></g>
+</svg>

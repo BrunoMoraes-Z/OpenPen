@@ -1,0 +1,35 @@
+[package]
+name = "pen-export"
+description = "Export vetorial da DisplayList: SVG (string) e PDF (svg2pdf, fontes embutidas)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pen-render.workspace = true
+pen-raster.workspace = true
+pen-fonts.workspace = true
+tiny-skia.workspace = true
+smallvec.workspace = true
+thiserror.workspace = true
+base64 = "0.22"
+# svg2pdf 0.13 shares usvg 0.45 / fontdb 0.23 / tiny-skia 0.11 with the rest of the tree.
+svg2pdf = "0.13"
+pdf-writer = "0.12"
+ttf-parser = "0.25"
+png = "0.17"
+
+[dev-dependencies]
+pen-doc.workspace = true
+pen-layout.workspace = true
+resvg = "0.45"
+lopdf = "0.38"
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+
+[lib]
+# rustdoc is not available in this toolchain
+doctest = false
+
+[[bench]]
+name = "export"
+harness = false

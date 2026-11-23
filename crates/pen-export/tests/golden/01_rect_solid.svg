@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" width="96" height="64" viewBox="0 0 96 64">
+<rect x="0" y="0" width="96" height="64" fill="#ffffff"/>
+<g transform="translate(8 8)"><rect width="40" height="24" fill="#dc3c3c"/></g>
+<g transform="translate(30 20)"><rect width="50" height="36" fill="#285adc" fill-opacity="0.6"/></g>
+</svg>

@@ -1,4 +1,4 @@
-//! OpenPen headless CLI: `validate`, `migrate` and `render`.
+//! OpenPen headless CLI: `validate`, `migrate`, `render` and `mcp`.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -38,10 +38,10 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
-    /// Render a document (or one node) to PNG with the CPU rasterizer.
+    /// Render a document (or one node) to PNG, SVG or PDF (chosen by the output extension).
     Render {
         input: PathBuf,
-        /// Output PNG path.
+        /// Output path: `.png` (CPU rasterizer), `.svg` or `.pdf` (vector).
         #[arg(short, long)]
         output: PathBuf,
         /// Render only this node (slash id path, e.g. `frame1` or `inst/child`).
@@ -56,6 +56,24 @@ enum Command {
         /// Background color `#RRGGBB[AA]` (default: transparent).
         #[arg(long)]
         bg: Option<String>,
+        /// SVG/PDF: convert text to glyph outlines instead of real text.
+        #[arg(long)]
+        outline: bool,
+    },
+    /// MCP server for agents: bridges stdio to the running OpenPen app.
+    Mcp {
+        /// Socket name of the app instance (default: `desktop`).
+        #[arg(long)]
+        socket: Option<String>,
+        /// Agent name shown in the editor (default: the MCP client's name).
+        #[arg(long)]
+        agent: Option<String>,
+        /// Serve this .pen file without the app (not available yet).
+        #[arg(long, value_name = "FILE")]
+        headless: Option<PathBuf>,
+        /// Print the Claude Code `mcpServers` entry for this executable and exit.
+        #[arg(long)]
+        print_config: bool,
     },
 }
 
@@ -81,6 +99,7 @@ fn main() -> ExitCode {
             scale,
             theme,
             bg,
+            outline,
         } => run_render(
             &input,
             &output,
@@ -88,6 +107,19 @@ fn main() -> ExitCode {
             scale,
             &theme,
             bg.as_deref(),
+            outline,
+        )
+        .map(|()| true),
+        Command::Mcp {
+            socket,
+            agent,
+            headless,
+            print_config,
+        } => run_mcp(
+            socket.as_deref(),
+            agent.as_deref(),
+            headless.as_deref(),
+            print_config,
         )
         .map(|()| true),
     };
@@ -176,6 +208,40 @@ fn run_migrate(input: &Path, output: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
+fn run_mcp(
+    socket: Option<&str>,
+    agent: Option<&str>,
+    headless: Option<&Path>,
+    print_config: bool,
+) -> Result<()> {
+    if print_config {
+        let exe = std::env::current_exe().context("locating openpen-cli")?;
+        println!(
+            "{}",
+            pen_mcp::config::claude_code_config_string(&exe, socket)
+        );
+        return Ok(());
+    }
+    if let Some(file) = headless {
+        // TODO(headless-mcp): load `file` into a pen-script backed `ToolBackend`
+        // and call `pen_mcp::serve_stdio(backend, McpOptions { agent_name, ..
+        // McpOptions::with_default_skills() })` on this runtime.
+        anyhow::bail!(
+            "`mcp --headless {}` is not implemented yet; start the OpenPen app and use `openpen-cli mcp`",
+            file.display()
+        );
+    }
+    let name = socket.unwrap_or(pen_mcp::socket::DEFAULT_SOCKET_NAME);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("starting the async runtime")?;
+    let result = runtime.block_on(pen_mcp::socket::run_stdio_shim(name, agent));
+    // A blocking stdin read may still be pending; do not wait for it.
+    runtime.shutdown_background();
+    result.map_err(Into::into)
+}
+
 fn run_render(
     input: &Path,
     output: &Path,
@@ -183,8 +249,20 @@ fn run_render(
     scale: f32,
     theme: &[(String, String)],
     bg: Option<&str>,
+    outline: bool,
 ) -> Result<()> {
     use pen_render::{Color, Rect};
+    let format = output
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    if !matches!(format.as_str(), "png" | "svg" | "pdf") {
+        anyhow::bail!(
+            "unsupported output format (use .png, .svg or .pdf): {}",
+            output.display()
+        );
+    }
     let bytes = std::fs::read(input).with_context(|| format!("reading {}", input.display()))?;
     let dir = input
         .parent()
@@ -239,8 +317,28 @@ fn run_render(
         viewport.w.max(1.0),
         viewport.h.max(1.0),
     );
-    let png = pen_raster::render_to_png(&list, viewport, scale, background)?;
-    std::fs::write(output, png).with_context(|| format!("writing {}", output.display()))?;
+    let bytes = match format.as_str() {
+        "png" => pen_raster::render_to_png(&list, viewport, scale, background)?,
+        vector => {
+            let opts = pen_export::ExportOptions {
+                region: Some(viewport),
+                scale,
+                background: (background.a > 0.0).then_some(background),
+                text: if outline {
+                    pen_export::TextMode::Outlines
+                } else {
+                    pen_export::TextMode::Text
+                },
+                ..Default::default()
+            };
+            if vector == "svg" {
+                pen_export::svg::export(&list, &opts).into_bytes()
+            } else {
+                pen_export::pdf::export(&list, &opts)?
+            }
+        }
+    };
+    std::fs::write(output, bytes).with_context(|| format!("writing {}", output.display()))?;
     eprintln!(
         "rendered {}x{} px ({} items)",
         (viewport.w * scale).ceil(),

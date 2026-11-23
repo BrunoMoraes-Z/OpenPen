@@ -71,6 +71,20 @@ impl UndoStack {
         Ok(())
     }
 
+    /// Records ops that were applied directly with [`SceneDoc::apply`] (outside the stack):
+    /// `inverses` are their inverses in application order. They become one undo step, or
+    /// join the open block. Empty input records nothing.
+    pub fn record(&mut self, inverses: Vec<DocOp>) {
+        if inverses.is_empty() {
+            return;
+        }
+        if self.depth == 0 {
+            self.push(inverses);
+        } else {
+            self.open.extend(inverses);
+        }
+    }
+
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }

@@ -8,11 +8,13 @@
 
 mod blur;
 pub mod geom;
+mod outline;
 mod paint;
 mod renderer;
 mod text;
 
 pub use cosmic_text::FontSystem;
+pub use outline::TextOutline;
 pub use tiny_skia::Pixmap;
 
 use pen_render::{Color, DisplayList, Rect};

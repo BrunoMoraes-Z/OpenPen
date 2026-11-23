@@ -16,7 +16,11 @@ pen-doc.workspace = true
 pen-layout.workspace = true
 pen-render.workspace = true
 pen-raster.workspace = true
+pen-mcp.workspace = true
+pen-export.workspace = true
 clap = { version = "=4.6.7", features = ["derive"] }
+tokio = { version = "1", features = ["rt", "io-std"] }
 
 [dev-dependencies]
 serde_json.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

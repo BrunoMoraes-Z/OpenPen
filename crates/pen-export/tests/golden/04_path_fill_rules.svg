@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" width="96" height="64" viewBox="0 0 96 64">
+<rect x="0" y="0" width="96" height="64" fill="#ffffff"/>
+<path d="M24 8 L39.282 55.034 L-0.727 25.966 L48.727 25.966 L8.718 55.034 Z" fill="#141414"/>
+<path d="M72 8 L87.282 55.034 L47.273 25.966 L96.727 25.966 L56.718 55.034 Z" fill-rule="evenodd" fill="#141414"/>
+</svg>

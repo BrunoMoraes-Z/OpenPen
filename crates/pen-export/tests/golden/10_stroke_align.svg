@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" width="96" height="64" viewBox="0 0 96 64">
+<rect x="0" y="0" width="96" height="64" fill="#ffffff"/>
+<g transform="translate(8 16)"><rect width="20" height="32" rx="4" fill="#fad250"/><path d="M4 0H16A4 4 0 0 1 20 4V28A4 4 0 0 1 16 32H4A4 4 0 0 1 0 28V4A4 4 0 0 1 4 0Z M6 6H14V26H6V6Z" fill-rule="evenodd" fill="#0000a0" fill-opacity="0.6"/></g>
+<g transform="translate(38 16)"><rect width="20" height="32" rx="4" fill="#fad250"/><rect width="20" height="32" rx="4" fill="none" stroke="#0000a0" stroke-opacity="0.6" stroke-width="6"/></g>
+<g transform="translate(68 16)"><rect width="20" height="32" rx="4" fill="#fad250"/><path d="M4 -6H16A10 10 0 0 1 26 4V28A10 10 0 0 1 16 38H4A10 10 0 0 1 -6 28V4A10 10 0 0 1 4 -6Z M4 0H16A4 4 0 0 1 20 4V28A4 4 0 0 1 16 32H4A4 4 0 0 1 0 28V4A4 4 0 0 1 4 0Z" fill-rule="evenodd" fill="#0000a0" fill-opacity="0.6"/></g>
+</svg>
