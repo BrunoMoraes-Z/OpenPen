@@ -8,7 +8,7 @@
 [![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows)](#build-from-source)
 [![UI](https://img.shields.io/badge/UI-GPUI-6E56CF)](https://www.gpui.rs/)
 [![MCP](https://img.shields.io/badge/MCP-ready-1f6feb)](#use-with-claude-code)
-[![License](https://img.shields.io/badge/license-TBD-lightgrey)](#license)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 <img src="docs/media/openpen-demo.gif" alt="Claude Code building a design system and screens live in OpenPen" width="960">
 
@@ -352,4 +352,6 @@ Bundled fonts (embedded in the binary, see [`assets/fonts/LICENSES.md`](assets/f
 
 ## License
 
-To be decided. A license file has not been added to the repository yet.
+OpenPen is released under the [MIT License](LICENSE).
+
+Bundled fonts keep their own licenses (SIL OFL 1.1, ISC, Apache 2.0, MIT); see [`assets/fonts/LICENSES.md`](assets/fonts/LICENSES.md).
