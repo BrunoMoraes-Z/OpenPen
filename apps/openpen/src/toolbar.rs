@@ -9,7 +9,7 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
-use crate::actions::{self, CANVAS_CTX};
+use crate::actions;
 use crate::editor_state::EditorState;
 use crate::theme::{Palette, PaletteExt, island, metrics};
 use crate::tools::Tool;
@@ -84,7 +84,7 @@ fn tool_button(
         .child(Icon::new(tool.icon()).size(px(16.)))
         .tooltip(move |w, cx| {
             Tooltip::new(label)
-                .action(action.as_ref(), Some(CANVAS_CTX))
+                .action(action.as_ref(), Some(actions::TOOLTIP_CTX))
                 .build(w, cx)
         })
         .on_click(move |_, _, cx| state.update(cx, |s, cx| s.set_tool(tool, cx)))
@@ -165,7 +165,7 @@ pub fn render_toolbar(
                     .child(Icon::new(IconName::Search).size(px(16.)))
                     .tooltip(|w, cx| {
                         Tooltip::new("Find layers")
-                            .action(&actions::FindLayers, Some(actions::EDITOR_CTX))
+                            .action(&actions::FindLayers, Some(actions::TOOLTIP_CTX))
                             .build(w, cx)
                     })
                     .on_click(|_, w, cx| w.dispatch_action(Box::new(actions::FindLayers), cx)),

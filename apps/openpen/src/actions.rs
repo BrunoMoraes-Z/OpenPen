@@ -111,6 +111,14 @@ gpui_kit::actions!(
 pub const EDITOR_CTX: &str = "OpenPen";
 pub const CANVAS_CTX: &str = "OpenPen && !Input";
 
+/// Context *stack* used to look up the shortcut shown in a tooltip
+/// (`Tooltip::action(.., Some(TOOLTIP_CTX))`). gpui-kit parses it with
+/// `KeyContext::parse`, which takes context names, not a predicate: passing a
+/// predicate such as [`CANVAS_CTX`] makes GPUI's parser recurse until the main
+/// thread overflows its stack (it crashed on hovering any toolbar tool).
+/// Bindings in `CANVAS_CTX` still match this stack, so their keys show up.
+pub const TOOLTIP_CTX: &str = EDITOR_CTX;
+
 /// One row of the shortcut table.
 pub struct Shortcut {
     /// GPUI keystroke syntax (`ctrl-shift-z`); `secondary-` = Cmd on macOS,
@@ -312,6 +320,25 @@ pub fn display_keys(keys: &str) -> String {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    /// Regression: tooltips must pass a context *stack*, never a predicate
+    /// (see [`TOOLTIP_CTX`]), and every shortcut's predicate must still match
+    /// it so the key label shows up in the tooltip.
+    #[test]
+    fn tooltip_context_is_a_context_stack_matching_all_shortcuts() {
+        let stack = gpui_kit::KeyContext::parse(TOOLTIP_CTX).expect("plain context names");
+        for ctx in [EDITOR_CTX, CANVAS_CTX] {
+            let pred = KeyBindingContextPredicate::parse(ctx).unwrap();
+            assert!(
+                pred.eval(std::slice::from_ref(&stack)),
+                "{ctx} must match the tooltip context"
+            );
+        }
+        assert!(
+            !TOOLTIP_CTX.contains(['&', '|', '!', '>', '=']),
+            "TOOLTIP_CTX must not be a predicate"
+        );
+    }
 
     #[test]
     fn no_conflicting_shortcuts() {

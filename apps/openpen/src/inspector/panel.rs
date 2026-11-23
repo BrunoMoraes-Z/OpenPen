@@ -2271,7 +2271,7 @@ impl InspectorPanel {
                         ("Add flex layout", Box::new(actions::AddFlexLayout))
                     };
                     Tooltip::new(label)
-                        .action(action.as_ref(), Some(actions::CANVAS_CTX))
+                        .action(action.as_ref(), Some(actions::TOOLTIP_CTX))
                         .build(w, cx)
                 })
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -3587,7 +3587,7 @@ fn action_group(
                 .child(Icon::new(icon).size(px(16.)))
                 .tooltip(move |w, cx| {
                     Tooltip::new(tip)
-                        .action(a2.as_ref(), Some(actions::CANVAS_CTX))
+                        .action(a2.as_ref(), Some(actions::TOOLTIP_CTX))
                         .build(w, cx)
                 })
                 .on_click(move |_, w, cx| w.dispatch_action(action.boxed_clone(), cx)),
