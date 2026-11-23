@@ -854,15 +854,23 @@ impl Workspace {
                     ))
             });
         let maximized = window.is_maximized();
+        // A solid app bar spanning the whole width. It occludes the canvas
+        // below so a press on its empty space never starts a canvas gesture
+        // (marquee), and the empty space is the window's drag/caption area
+        // (move, double-click to maximize, Aero snap).
         div()
             .id("tab-bar")
             .absolute()
             .top_0()
             .left_0()
             .right_0()
-            .h(px(metrics::TAB_BAR_HEIGHT))
+            .h(px(metrics::TAB_BAR_HEIGHT + metrics::ISLAND_INSET / 2.0))
             .pt(px(metrics::ISLAND_INSET))
             .px(px(metrics::ISLAND_INSET))
+            .bg(p.canvas)
+            .border_b_1()
+            .border_color(p.border)
+            .occlude()
             .flex()
             .items_start()
             .gap(px(8.))
