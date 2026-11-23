@@ -4875,6 +4875,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "cosmic-text",
+ "embed-resource",
  "futures",
  "glam",
  "gpui-kit",
@@ -4903,6 +4904,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "embed-resource",
  "pen-codegen",
  "pen-doc",
  "pen-export",

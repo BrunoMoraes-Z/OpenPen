@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/icon/openpen-icon-1024.png" alt="OpenPen icon" width="128">
+
 # OpenPen
 
 **A native, GPU-accelerated design editor for `.pen` files, built in Rust and made to be driven by AI agents.**

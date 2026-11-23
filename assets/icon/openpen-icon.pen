@@ -1,0 +1,89 @@
+{
+  "version": "2.22",
+  "children": [
+    {
+      "type": "frame",
+      "id": "APdG8",
+      "name": "OpenPen App Icon",
+      "x": 0,
+      "y": 0,
+      "width": 1024,
+      "height": 1024,
+      "layout": "none",
+      "cornerRadius": 232,
+      "clip": true,
+      "fill": {
+        "type": "gradient",
+        "gradientType": "linear",
+        "rotation": 225,
+        "colors": [
+          {
+            "color": "#A78BFA",
+            "position": 0
+          },
+          {
+            "color": "#7C3AED",
+            "position": 0.5
+          },
+          {
+            "color": "#3730A3",
+            "position": 1
+          }
+        ]
+      },
+      "children": [
+        {
+          "type": "ellipse",
+          "id": "arhxg",
+          "name": "Glow",
+          "x": -220,
+          "y": -260,
+          "width": 900,
+          "height": 820,
+          "fill": {
+            "type": "gradient",
+            "gradientType": "radial",
+            "colors": [
+              {
+                "color": "#FFFFFF33",
+                "position": 0
+              },
+              {
+                "color": "#FFFFFF00",
+                "position": 1
+              }
+            ]
+          }
+        },
+        {
+          "type": "path",
+          "id": "l13Es",
+          "name": "Nib",
+          "x": 551,
+          "y": 195,
+          "rotation": -45,
+          "width": 400,
+          "height": 560,
+          "viewBox": [
+            0,
+            0,
+            400,
+            560
+          ],
+          "geometry": "M200 0 C262 0 318 42 338 112 L400 300 C332 382 262 470 200 560 C138 470 68 382 0 300 L62 112 C82 42 138 0 200 0 Z M234 262 A34 34 0 1 0 166 262 A34 34 0 1 0 234 262 Z M193 296 L207 296 L203 520 L197 520 Z",
+          "fillRule": "evenodd",
+          "fill": "#FFFFFF",
+          "effect": {
+            "type": "shadow",
+            "offset": {
+              "x": 0,
+              "y": 24
+            },
+            "blur": 48,
+            "color": "#1E1B4B66"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -48,3 +48,6 @@ doctest = false
 [[bin]]
 name = "openpen"
 path = "src/main.rs"
+
+[build-dependencies]
+embed-resource = "3"
