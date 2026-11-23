@@ -438,6 +438,7 @@ impl Tx {
         diag_warnings(diags, &mut warnings, true);
         sanitize_tree(&mut node, &mut warnings);
         drop_leaf_children(&mut node, &mut warnings);
+        self.undefined_var_warnings(&node, None, true, &mut warnings);
         for w in warnings {
             self.warn(w);
         }
@@ -861,6 +862,7 @@ impl Tx {
             warnings.push(format!("{path}: unknown property '{k}' (ignored)"));
         }
         patch.extra.clear();
+        self.undefined_var_warnings(&patch, Some(path), false, &mut warnings);
         for w in warnings {
             self.warn(w);
         }
@@ -1074,6 +1076,49 @@ impl Tx {
     }
 
     // ------------------------------------------------------------------ variables
+
+    /// Warns about `"$name"` values whose variable does not exist. In `.pen`
+    /// any string starting with `$` is a variable reference, so agents writing
+    /// literal text such as prices ("$18,420") must escape it as `"\$18,420"`.
+    fn undefined_var_warnings(
+        &self,
+        node: &Node,
+        loc: Option<&str>,
+        deep: bool,
+        warnings: &mut Vec<String>,
+    ) {
+        let vars = self.scene.document().variables.as_ref();
+        let loc = match loc {
+            Some(l) => l.to_string(),
+            None => match (node.name.as_deref(), node.id_str()) {
+                (Some(n), _) if !n.is_empty() => n.to_string(),
+                (_, id) if !id.is_empty() => id.to_string(),
+                _ => node
+                    .kind
+                    .as_ref()
+                    .map_or("node", |k| k.as_str())
+                    .to_string(),
+            },
+        };
+        let mut missing = Vec::new();
+        node.for_each_var_shallow(&mut |v| {
+            // Library variables (`alias:name`) are resolved through imports.
+            if !v.contains(':') && !vars.is_some_and(|m| m.contains_key(v)) {
+                missing.push(v.to_string());
+            }
+        });
+        for v in missing {
+            warnings.push(format!(
+                "{loc}: '${v}' is read as a reference to an undefined variable; \
+                 for a literal dollar sign write '\\${v}' (in JS: \"\\\\${v}\")"
+            ));
+        }
+        if deep {
+            for c in node.children_slice() {
+                self.undefined_var_warnings(c, None, true, warnings);
+            }
+        }
+    }
 
     fn set_variables(&mut self, vars: Value, replace: bool) -> R<()> {
         let Value::Object(vm) = vars else {
@@ -1472,11 +1517,6 @@ impl Tx {
         let format = ExportFormat::parse(fmt_s).ok_or_else(|| {
             format!("unknown export format '{fmt_s}' (png, jpeg, webp, pdf, svg, html-tailwind, html-css)")
         })?;
-        if matches!(format, ExportFormat::HtmlTailwind | ExportFormat::HtmlCss) {
-            return Err(format!(
-                "export format '{fmt_s}' is not supported yet in OpenPen (use png, jpeg, webp, svg or pdf)"
-            ));
-        }
         let vector = matches!(format, ExportFormat::Svg | ExportFormat::Pdf);
         let out = str_arg(args, "outputPath", "Export outputPath")?;
         let mut output = PathBuf::from(out);

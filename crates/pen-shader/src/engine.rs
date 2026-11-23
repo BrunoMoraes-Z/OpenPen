@@ -4,7 +4,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
@@ -68,6 +68,10 @@ impl Compiled {
 
     pub fn needs(&self, given: &[(Arc<str>, ParamValue)]) -> ShaderNeeds {
         let mut n = ShaderNeeds::default();
+        for u in &self.uniforms {
+            n.time |= u.role == Role::Time;
+            n.mouse |= u.role == Role::Mouse;
+        }
         for u in self.uniforms.iter().filter(|u| u.ty == UType::Sampler2D) {
             match self.sampler_source(u, given).as_deref() {
                 Some("pencil:object") => n.object = true,
@@ -140,6 +144,11 @@ pub struct RenderInput<'a> {
     pub threads: usize,
     /// Run on the GPU (falls back to the CPU on failure).
     pub gpu: bool,
+    /// `@time`, seconds.
+    pub time: f32,
+    /// `@mouse`, node-local with y down (`None` = the uniform's value, else the node
+    /// center).
+    pub mouse: Option<Vec2>,
 }
 
 struct TexSet<'a> {
@@ -411,10 +420,13 @@ pub fn render(
         } else {
             let nums: Vec<f32> = match u.role {
                 Role::Resolution => vec![input.size.x, input.size.y],
-                Role::Time => vec![0.0],
-                Role::Mouse => match given {
-                    Some(v) => numbers(v),
-                    None => match &u.default {
+                Role::Time => vec![input.time],
+                // GL convention: origin at the node's bottom-left corner (Pen:
+                // `[mouse.x, h - mouse.y]` in node-local units).
+                Role::Mouse => match (input.mouse, given) {
+                    (Some(m), _) => vec![m.x, input.size.y - m.y],
+                    (None, Some(v)) => numbers(v),
+                    (None, None) => match &u.default {
                         Some(d) => text_numbers(d),
                         None => vec![input.size.x * 0.5, input.size.y * 0.5],
                     },
@@ -571,8 +583,14 @@ type Prog = Arc<Result<Compiled, String>>;
 struct ProgEntry {
     modified: Option<SystemTime>,
     len: u64,
+    /// When the file was last checked on disk.
+    checked: Instant,
     prog: Prog,
 }
+
+/// A shader file is checked on disk at most this often (a `stat` costs tens of µs on
+/// Windows, and an animation frame asks for each program several times).
+const RECHECK: Duration = Duration::from_millis(500);
 
 enum Entry {
     Pending,
@@ -586,7 +604,11 @@ struct Inner {
     programs: Mutex<HashMap<PathBuf, ProgEntry>>,
     cache: Mutex<(HashMap<u64, Entry>, VecDeque<u64>)>,
     ready: AtomicBool,
-    queue: Mutex<Option<Sender<ShaderRequest>>>,
+    queue: Mutex<Option<Sender<Job>>>,
+    /// Deferred jobs queued or running.
+    in_flight: AtomicUsize,
+    /// Latest frames of animated shaders, by [`ShaderRequest::slot`] (deferred engine).
+    slots: Mutex<(HashMap<u64, Slot>, VecDeque<u64>)>,
     raster: Mutex<pen_raster::RasterContext>,
     stats: Mutex<ShaderStats>,
 }
@@ -603,6 +625,28 @@ pub struct ShaderStats {
 
 /// Max cached results.
 const CACHE_CAP: usize = 256;
+/// Max animated-shader slots remembered.
+const SLOT_CAP: usize = 1024;
+
+/// A deferred render.
+struct Job {
+    req: ShaderRequest,
+    key: u64,
+    /// Store the result in [`Inner::slots`] (animated) instead of the cache.
+    slot: bool,
+}
+
+/// The frames of one animated shader fill/effect: the last result (shown until the next
+/// one is ready) and whether a newer frame is rendering. One frame renders at a time, so
+/// an animation never queues more work than the GPU keeps up with.
+#[derive(Default)]
+struct Slot {
+    /// Key and result of the last finished frame.
+    shown: Option<(u64, Entry)>,
+    /// Last successful frame (drawn while the next one renders).
+    image: Option<Arc<ImageData>>,
+    rendering: bool,
+}
 
 /// Shader engine plugged into the display-list builder (see the crate docs).
 /// Cloning shares the caches.
@@ -631,6 +675,8 @@ impl ShaderEngine {
                 cache: Mutex::new((HashMap::new(), VecDeque::new())),
                 ready: AtomicBool::new(false),
                 queue: Mutex::new(None),
+                in_flight: AtomicUsize::new(0),
+                slots: Mutex::new((HashMap::new(), VecDeque::new())),
                 raster: Mutex::new(pen_raster::RasterContext::new()),
                 stats: Mutex::new(ShaderStats::default()),
             }),
@@ -654,6 +700,10 @@ impl ShaderEngine {
             c.0.clear();
             c.1.clear();
         }
+        if let Ok(mut c) = self.inner.slots.lock() {
+            c.0.clear();
+            c.1.clear();
+        }
     }
 
     /// The compiled shader at `url` (re-read when the file changes).
@@ -671,16 +721,26 @@ impl Default for ShaderEngine {
 impl Inner {
     fn program(&self, url: &str, base: Option<&Path>) -> Prog {
         let path = pen_layout::script::resolve_path(base, url);
+        if let Some(e) = self
+            .programs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&path)
+            && e.checked.elapsed() < RECHECK
+        {
+            return e.prog.clone();
+        }
         let meta = std::fs::metadata(&path).ok();
         let (modified, len) = (
             meta.as_ref().and_then(|m| m.modified().ok()),
             meta.as_ref().map_or(0, |m| m.len()),
         );
         let mut progs = self.programs.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(e) = progs.get(&path)
+        if let Some(e) = progs.get_mut(&path)
             && e.modified == modified
             && e.len == len
         {
+            e.checked = Instant::now();
             return e.prog.clone();
         }
         let prog: Prog = Arc::new(match std::fs::read_to_string(&path) {
@@ -692,6 +752,7 @@ impl Inner {
             ProgEntry {
                 modified,
                 len,
+                checked: Instant::now(),
                 prog: prog.clone(),
             },
         );
@@ -726,12 +787,18 @@ impl Inner {
                 backdrop: req.backdrop.as_deref(),
                 threads: self.limits.threads,
                 gpu: use_gpu,
+                time: req.time,
+                mouse: req.mouse,
             },
             &mut raster,
         );
         drop(raster);
         match r {
-            Ok(img) => {
+            Ok(mut img) => {
+                // Frames of an animated shader in the editor replace each other.
+                if self.deferred && req.slot != 0 && compiled.needs(&[]).animated() {
+                    img.id |= pen_render::TRANSIENT_IMAGE;
+                }
                 if let Ok(mut s) = self.stats.lock() {
                     s.renders += 1;
                     s.pixels += img.width as u64 * img.height as u64;
@@ -808,42 +875,138 @@ impl ShaderRenderer for ShaderEngine {
             self.inner.store(key, e);
             return l;
         }
+        let animated = req.slot != 0
+            && match &*prog {
+                Ok(c) => c.needs(&[]).animated(),
+                Err(_) => false,
+            };
+        if animated {
+            return self.render_slot(req, key);
+        }
         self.inner.store(key, Entry::Pending);
+        self.enqueue(Job {
+            req: req.clone(),
+            key,
+            slot: false,
+        })
+    }
+
+    fn take_ready(&self) -> bool {
+        self.inner.ready.swap(false, Ordering::AcqRel)
+    }
+
+    fn busy(&self) -> bool {
+        self.inner.in_flight.load(Ordering::Acquire) > 0
+    }
+}
+
+impl ShaderEngine {
+    /// Deferred render of an animated shader: the frame for `key` if it is the last one
+    /// finished, else the previous frame while this one renders (at most one in flight
+    /// per slot; a request arriving meanwhile is answered with the previous frame and
+    /// asked again when the running one lands).
+    fn render_slot(&self, req: &ShaderRequest, key: u64) -> ShaderLookup {
+        let mut slots = self.inner.slots.lock().unwrap_or_else(|e| e.into_inner());
+        let (map, order) = &mut *slots;
+        if !map.contains_key(&req.slot) {
+            order.push_back(req.slot);
+            while order.len() > SLOT_CAP {
+                if let Some(old) = order.pop_front() {
+                    map.remove(&old);
+                }
+            }
+        }
+        let s = map.entry(req.slot).or_default();
+        if let Some((k, e)) = &s.shown
+            && *k == key
+        {
+            return lookup(e);
+        }
+        let stale = s.image.clone();
+        if !s.rendering {
+            s.rendering = true;
+            drop(slots);
+            if let l @ (ShaderLookup::Ready(_) | ShaderLookup::Failed(_)) = self.enqueue(Job {
+                req: req.clone(),
+                key,
+                slot: true,
+            }) {
+                return l;
+            }
+        }
+        stale.map_or(ShaderLookup::Pending, ShaderLookup::Updating)
+    }
+
+    /// Sends a job to the worker thread (started on first use); renders inline if the
+    /// thread cannot be started.
+    fn enqueue(&self, job: Job) -> ShaderLookup {
+        self.inner.in_flight.fetch_add(1, Ordering::AcqRel);
         let mut q = self.inner.queue.lock().unwrap_or_else(|e| e.into_inner());
         if q.is_none() {
-            let (tx, rx) = channel::<ShaderRequest>();
+            let (tx, rx) = channel::<Job>();
             let inner = self.inner.clone();
             let spawned = std::thread::Builder::new()
                 .name("pen-shader".into())
                 .spawn(move || {
-                    while let Ok(req) = rx.recv() {
-                        let prog = inner.program(&req.url, req.base_dir.as_deref());
-                        let mut h = DefaultHasher::new();
-                        req.key.hash(&mut h);
-                        (Arc::as_ptr(&prog) as usize).hash(&mut h);
-                        let key = h.finish();
-                        let e = inner.run(&req);
-                        inner.store(key, e);
-                        inner.ready.store(true, Ordering::Release);
+                    while let Ok(job) = rx.recv() {
+                        inner.finish(job);
                     }
                 });
             if spawned.is_ok() {
                 *q = Some(tx);
             }
         }
-        match q.as_ref() {
-            Some(tx) if tx.send(req.clone()).is_ok() => ShaderLookup::Pending,
-            _ => {
-                drop(q);
-                let e = self.inner.run(req);
-                let l = lookup(&e);
-                self.inner.store(key, e);
-                l
-            }
+        let job = match q.as_ref() {
+            Some(tx) => match tx.send(job) {
+                Ok(()) => return ShaderLookup::Pending,
+                Err(e) => e.0,
+            },
+            None => job,
+        };
+        drop(q);
+        let slot = job.slot.then_some(job.req.slot);
+        let key = job.key;
+        self.inner.finish(job);
+        self.inner.ready.store(false, Ordering::Release);
+        match slot {
+            Some(s) => self
+                .inner
+                .slots
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .0
+                .get(&s)
+                .and_then(|s| s.shown.as_ref().map(|(_, e)| lookup(e)))
+                .unwrap_or(ShaderLookup::Pending),
+            None => self
+                .inner
+                .cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .0
+                .get(&key)
+                .map_or(ShaderLookup::Pending, lookup),
         }
     }
+}
 
-    fn take_ready(&self) -> bool {
-        self.inner.ready.swap(false, Ordering::AcqRel)
+impl Inner {
+    /// Runs a deferred job and publishes its result.
+    fn finish(&self, job: Job) {
+        let e = self.run(&job.req);
+        if job.slot {
+            let mut slots = self.slots.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(s) = slots.0.get_mut(&job.req.slot) {
+                if let Entry::Ready(img) = &e {
+                    s.image = Some(img.clone());
+                }
+                s.shown = Some((job.key, e));
+                s.rendering = false;
+            }
+        } else {
+            self.store(job.key, e);
+        }
+        self.in_flight.fetch_sub(1, Ordering::AcqRel);
+        self.ready.store(true, Ordering::Release);
     }
 }

@@ -26,6 +26,7 @@ pub mod recent;
 pub mod save;
 pub mod scene_document;
 pub mod select;
+pub mod shader_anim;
 pub mod theme;
 pub mod toolbar;
 pub mod tools;

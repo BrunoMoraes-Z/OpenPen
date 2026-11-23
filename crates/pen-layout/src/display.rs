@@ -60,6 +60,17 @@ pub struct DisplayListBuilder {
     node_start: usize,
     /// Directory of the document being built (shader urls).
     base_dir: Option<std::path::PathBuf>,
+    /// Node being emitted (shader slots and animation state).
+    cur_node: NodeKey,
+    /// Animation state of shader nodes (see [`Self::set_shader_anim`]).
+    anim: HashMap<NodeKey, crate::shader::ShaderAnim>,
+    /// Nodes whose shaders use `@time` / `@mouse`, as of their chunk's last build.
+    animated: HashMap<NodeKey, crate::shader::AnimatedShader>,
+    /// Building for export: shaders get `export_time` and the node center, nothing is
+    /// recorded.
+    exporting: bool,
+    /// `@time` of exports and of nodes without animation state (0 by default).
+    export_time: f32,
 }
 
 mod shader_fx;
@@ -175,6 +186,11 @@ impl DisplayListBuilder {
             fill_ctx: None,
             node_start: 0,
             base_dir: None,
+            cur_node: NodeKey(u32::MAX),
+            anim: HashMap::new(),
+            animated: HashMap::new(),
+            exporting: false,
+            export_time: 0.0,
         }
     }
 
@@ -198,8 +214,22 @@ impl DisplayListBuilder {
             return Vec::new();
         }
         let roots: Vec<NodeKey> = self.pending_roots.drain().collect();
+        self.rebuild_roots(scene, layout, list, roots)
+    }
+
+    /// Rebuilds, in place, the chunks of `roots` that are in `list`. Returns them.
+    pub fn rebuild_roots(
+        &mut self,
+        scene: &SceneDoc,
+        layout: &LayoutEngine,
+        list: &mut DisplayList,
+        roots: impl IntoIterator<Item = NodeKey>,
+    ) -> Vec<NodeKey> {
         let mut rebuilt = Vec::new();
         for r in roots {
+            if rebuilt.contains(&r) {
+                continue;
+            }
             let Some(i) = list.chunks.iter().position(|c| c.root == r) else {
                 continue;
             };
@@ -209,6 +239,79 @@ impl DisplayListBuilder {
             }
         }
         rebuilt
+    }
+
+    /// Roots waiting for deferred images or shader frames.
+    pub fn pending_roots(&self) -> impl Iterator<Item = NodeKey> + '_ {
+        self.pending_roots.iter().copied()
+    }
+
+    /// Consumes the "deferred results arrived" flags of the image resolver and the shader
+    /// engine. True if any was set.
+    pub fn take_ready(&mut self) -> bool {
+        let images = self.assets.take_ready();
+        let shaders = self.shaders.as_ref().is_some_and(|s| s.take_ready());
+        images || shaders
+    }
+
+    /// True while the shader engine has deferred renders queued or running.
+    pub fn shaders_busy(&self) -> bool {
+        self.shaders.as_ref().is_some_and(|s| s.busy())
+    }
+
+    /// Nodes whose shaders use `@time` / `@mouse` (as of the last build of their chunk).
+    pub fn animated_shaders(
+        &self,
+    ) -> impl Iterator<Item = (NodeKey, crate::shader::AnimatedShader)> + '_ {
+        self.animated.iter().map(|(k, a)| (*k, *a))
+    }
+
+    /// Animation info of one node (see [`Self::animated_shaders`]).
+    pub fn animated_shader(&self, node: NodeKey) -> Option<crate::shader::AnimatedShader> {
+        self.animated.get(&node).copied()
+    }
+
+    /// Animation state used by the next build of `node`'s shaders (`None` = t = 0 and
+    /// the node center). Does not rebuild anything.
+    pub fn set_shader_anim(&mut self, node: NodeKey, anim: Option<crate::shader::ShaderAnim>) {
+        match anim {
+            Some(a) => {
+                self.anim.insert(node, a);
+            }
+            None => {
+                self.anim.remove(&node);
+            }
+        }
+    }
+
+    /// `@time` (seconds) of exports and of nodes without animation state (default 0,
+    /// like Pen's exports; the CLI's `render --time`).
+    pub fn set_export_shader_time(&mut self, t: f32) {
+        self.export_time = t;
+    }
+
+    /// Current animation state of `node` (see [`Self::set_shader_anim`]).
+    pub fn shader_anim(&self, node: NodeKey) -> Option<crate::shader::ShaderAnim> {
+        self.anim.get(&node).copied()
+    }
+
+    /// Builds the chunk of `k` for export: shaders at t = 0 with the mouse at the node
+    /// center, like Pen's exports.
+    pub fn build_export_chunk(
+        &mut self,
+        scene: &SceneDoc,
+        layout: &LayoutEngine,
+        k: NodeKey,
+    ) -> Option<Chunk> {
+        let was = std::mem::replace(&mut self.exporting, true);
+        let pending = self.pending_roots.contains(&k);
+        let c = self.build_chunk(scene, layout, k);
+        // An export build must not change what the editor waits for.
+        if pending {
+            self.pending_roots.insert(k);
+        }
+        self.exporting = was;
+        c
     }
 
     /// Rebuilds, in place, the chunks that use images whose file changed on
@@ -250,6 +353,9 @@ impl DisplayListBuilder {
 
     /// Full build.
     pub fn build(&mut self, scene: &SceneDoc, layout: &LayoutEngine) -> DisplayList {
+        if !self.exporting {
+            self.animated.clear();
+        }
         let chunks = scene
             .roots()
             .iter()
@@ -344,6 +450,9 @@ impl DisplayListBuilder {
         self.cur_root = root;
         self.base_dir = scene.base_dir().map(std::path::Path::to_path_buf);
         self.pending_roots.remove(&root);
+        if !self.exporting {
+            self.animated.retain(|_, a| a.root != root);
+        }
         self.emit(&mut cx, root, parent);
         let bounds = cx.bounds.pop().flatten()?;
         if cx.items.is_empty() {
@@ -396,6 +505,7 @@ impl DisplayListBuilder {
         let layer = (n.opacity < 1.0 && !fold) || blur > 0.0;
         let alpha = if fold { n.opacity } else { 1.0 };
         let shape = self.shape_of(n, size);
+        self.cur_node = key;
         let node_start = cx.items.len();
         self.node_start = node_start;
         self.fill_ctx = None;
@@ -472,6 +582,7 @@ impl DisplayListBuilder {
             for c in kids {
                 self.emit(cx, c, world);
             }
+            self.cur_node = key;
             if clip.is_some() {
                 cx.items.push(DisplayItem::PopClip);
                 cx.clips.pop();
@@ -508,6 +619,7 @@ impl DisplayListBuilder {
             }
         }
         if fx_shaders && let Some(fx) = &n.effects {
+            self.cur_node = key;
             self.apply_shader_effects(cx, &fx.shaders, world, size, node_start);
         }
     }

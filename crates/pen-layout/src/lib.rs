@@ -56,5 +56,7 @@ pub use display::{DisplayListBuilder, local_transform, node_world_rect, parent_w
 pub use layout::{LayoutEngine, NodeLayout};
 pub use pipeline::{Pipeline, UpdateStats};
 pub use script::{ScriptError, ScriptExpander, ScriptRequest, ScriptRunner, ScriptStats};
-pub use shader::{ShaderLookup, ShaderNeeds, ShaderRenderer, ShaderRequest};
+pub use shader::{
+    AnimatedShader, ShaderAnim, ShaderLookup, ShaderNeeds, ShaderRenderer, ShaderRequest,
+};
 pub use text::{TextEngine, TextLayout, text_block};

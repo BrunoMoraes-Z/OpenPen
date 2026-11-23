@@ -1,0 +1,66 @@
+{
+  "version": "2.22",
+  "themes": { "mode": ["light", "dark"] },
+  "variables": {
+    "accent": { "type": "color", "value": "#2563EB" },
+    "surface": { "type": "color", "value": [
+      { "value": "#FFFFFF" },
+      { "value": "#111827", "theme": { "mode": "dark" } } ] },
+    "text": { "type": "color", "value": [
+      { "value": "#111827" },
+      { "value": "#F9FAFB", "theme": { "mode": "dark" } } ] },
+    "radius": { "type": "number", "value": 12 },
+    "space": { "type": "number", "value": 16 }
+  },
+  "children": [
+    {
+      "type": "frame", "id": "btn", "name": "Button", "reusable": true, "x": 0, "y": 400,
+      "layout": "horizontal", "gap": 6, "padding": [8, 14], "alignItems": "center",
+      "cornerRadius": 8, "fill": "$accent",
+      "children": [
+        { "type": "icon", "id": "btnIcon", "name": "Icon", "library": "lucide", "icon": "check",
+          "width": 16, "height": 16, "fill": "#FFFFFF" },
+        { "type": "text", "id": "btnLabel", "name": "Label", "content": "Save",
+          "fontFamily": "Inter", "fontSize": 14, "fontWeight": "600", "fill": "#FFFFFF" }
+      ]
+    },
+    {
+      "type": "frame", "id": "card", "name": "Card", "x": 0, "y": 0, "width": 360,
+      "layout": "vertical", "gap": "$space", "padding": "$space",
+      "cornerRadius": "$radius", "fill": "$surface",
+      "stroke": "#E5E7EB", "strokeWidth": 1, "strokeAlignment": "inner",
+      "effect": { "type": "shadow", "offset": { "x": 0, "y": 4 }, "blur": 16, "color": "#0000001F" },
+      "children": [
+        { "type": "text", "id": "title", "name": "Title", "content": "Weekly report",
+          "fontFamily": "Inter", "fontSize": 20, "fontWeight": "700", "fill": "$text" },
+        { "type": "text", "id": "body", "name": "Body", "textGrowth": "fixed-width",
+          "width": "fill_container", "lineHeight": 1.5,
+          "content": "Revenue grew 12% week over week & churn stayed flat.",
+          "fontFamily": "Inter", "fontSize": 14, "fill": "#6B7280" },
+        { "type": "rectangle", "id": "divider", "name": "Divider", "width": "fill_container",
+          "height": 1, "fill": "#E5E7EB" },
+        {
+          "type": "frame", "id": "actions", "name": "Actions", "width": "fill_container",
+          "justifyContent": "end", "gap": 8,
+          "children": [
+            { "type": "ref", "id": "cancel", "ref": "btn", "fill": "#F3F4F6",
+              "descendants": {
+                "btnIcon": { "enabled": false },
+                "btnLabel": { "content": "Cancel", "fill": "$text" } } },
+            { "type": "ref", "id": "save", "ref": "btn" }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame", "id": "dark", "name": "Card dark", "x": 400, "y": 0,
+      "theme": { "mode": "dark" }, "layout": "vertical", "padding": 24, "gap": 8,
+      "cornerRadius": "$radius", "fill": "$surface",
+      "children": [
+        { "type": "text", "id": "darkTitle", "name": "Title", "content": "Dark mode",
+          "fontFamily": "Inter", "fontSize": 20, "fontWeight": "700", "fill": "$text" },
+        { "type": "ref", "id": "darkBtn", "ref": "btn" }
+      ]
+    }
+  ]
+}

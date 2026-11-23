@@ -1,0 +1,172 @@
+*,
+::before,
+::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+p {
+  margin: 0;
+}
+
+img,
+svg {
+  display: block;
+}
+
+/* Layers paint in document order and position their absolute children, as in the design. */
+[data-pen-root],
+[data-pen-root] * {
+  position: relative;
+}
+
+:root {
+  --accent: #2563eb;
+  --surface: #ffffff;
+  --text: #111827;
+  --radius: 12;
+  --space: 16;
+}
+
+[data-mode="dark"] {
+  --surface: #111827;
+  --text: #f9fafb;
+}
+
+.canvas {
+  width: 553.89px;
+  height: 432.8px;
+}
+
+.button {
+  position: absolute;
+  left: 0;
+  top: 400px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  width: fit-content;
+  height: fit-content;
+  border-radius: 8px;
+  background-color: var(--accent);
+}
+
+.icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: #ffffff;
+}
+
+.label {
+  flex-shrink: 0;
+  font-family: "Inter", sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: #ffffff;
+  white-space: pre;
+}
+
+.card {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: calc(var(--space) * 1px);
+  padding: calc(var(--space) * 1px);
+  width: 360px;
+  height: fit-content;
+  border-radius: calc(var(--radius) * 1px);
+  background-color: var(--surface);
+  outline: 1px solid #e5e7eb;
+  outline-offset: -1px;
+  box-shadow: 0 4px 16px 0 #0000001f;
+}
+
+.title {
+  flex-shrink: 0;
+  font-family: "Inter", sans-serif;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--text);
+  white-space: pre;
+}
+
+.body {
+  align-self: stretch;
+  flex-shrink: 0;
+  font-family: "Inter", sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #6b7280;
+  white-space: pre-wrap;
+}
+
+.divider {
+  align-self: stretch;
+  height: 1px;
+  flex-shrink: 0;
+  background-color: #e5e7eb;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: flex-start;
+  gap: 8px;
+  align-self: stretch;
+  flex-shrink: 0;
+}
+
+.button-2 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  background-color: #f3f4f6;
+}
+
+.label-2 {
+  flex-shrink: 0;
+  font-family: "Inter", sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--text);
+  white-space: pre;
+}
+
+.button-3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  background-color: var(--accent);
+}
+
+.card-dark {
+  position: absolute;
+  left: 400px;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 24px;
+  width: fit-content;
+  height: fit-content;
+  border-radius: calc(var(--radius) * 1px);
+  background-color: var(--surface);
+}

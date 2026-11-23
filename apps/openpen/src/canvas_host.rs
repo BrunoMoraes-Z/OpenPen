@@ -28,6 +28,7 @@ use crate::layers::model::LayerId;
 use crate::overlay::{self, Measure};
 use crate::scene_document::{NewKind, id_of, key_of};
 use crate::select::{self, PickTree};
+use crate::shader_anim::{self, ShaderAnimator};
 use crate::theme::PaletteExt;
 use crate::tools::Tool;
 use crate::ui::drag;
@@ -140,7 +141,58 @@ pub struct CanvasHost {
     prev_tool: Tool,
     /// Drag of a gradient handle / stop (see `gradient.rs`).
     grad: Option<gradient::GradDrag>,
+    /// `@time` / `@mouse` shader animation (see `shader_anim.rs`).
+    anim: ShaderAnimator,
+    /// The animation loop is running.
+    anim_task: bool,
+    /// Last pointer position over the canvas (document space), for `@mouse`.
+    pointer: Option<Vec2>,
+    /// `OPENPEN_ANIM_LOG=1`: frame counters logged every 2 s.
+    anim_log: Option<AnimLog>,
+    /// Last `render` (a window that stopped drawing, e.g. minimized, pauses the
+    /// animation even when the OS still reports it active).
+    last_render: std::time::Instant,
     _subs: Vec<Subscription>,
+}
+
+/// Shader animation counters (`OPENPEN_ANIM_LOG=1`, written to `%TEMP%/openpen.log`).
+#[derive(Default)]
+struct AnimLog {
+    since: Option<std::time::Instant>,
+    ticks: u32,
+    busy: u32,
+    frames: u32,
+    cost: std::time::Duration,
+}
+
+impl AnimLog {
+    fn record(
+        &mut self,
+        now: std::time::Instant,
+        busy: bool,
+        frame: bool,
+        cost: std::time::Duration,
+    ) {
+        let since = *self.since.get_or_insert(now);
+        self.ticks += 1;
+        self.busy += busy as u32;
+        self.frames += frame as u32;
+        self.cost += cost;
+        let secs = now.duration_since(since).as_secs_f32();
+        if secs >= 2.0 {
+            crate::workspace::log(&format!(
+                "shader anim: {:.1} frames/s, {} ticks ({} busy), UI-thread {:.2} ms/tick",
+                self.frames as f32 / secs,
+                self.ticks,
+                self.busy,
+                self.cost.as_secs_f64() * 1e3 / self.ticks.max(1) as f64,
+            ));
+            *self = Self {
+                since: Some(now),
+                ..Self::default()
+            };
+        }
+    }
 }
 
 fn rgb_u(c: u32) -> Hsla {
@@ -194,6 +246,11 @@ impl CanvasHost {
             vector: None,
             prev_tool: Tool::Move,
             grad: None,
+            anim: ShaderAnimator::new(),
+            anim_task: false,
+            pointer: None,
+            anim_log: std::env::var_os("OPENPEN_ANIM_LOG").map(|_| AnimLog::default()),
+            last_render: std::time::Instant::now(),
             _subs: subs,
         };
         this.sync_from_state(cx);
@@ -565,6 +622,7 @@ impl CanvasHost {
 
     fn on_drag_move(&mut self, ev: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
         let p = self.to_doc(ev.position, cx);
+        self.pointer = Some(p);
         let m = ev.modifiers;
         let zoom = self.zoom(cx);
         // Press -> Move once the pointer travelled far enough.
@@ -953,6 +1011,7 @@ impl CanvasHost {
     }
 
     fn on_hover_move(&mut self, ev: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.pointer = Some(self.to_doc(ev.position, cx));
         if !matches!(self.gesture, Gesture::None) || ev.pressed_button.is_some() {
             return;
         }
@@ -1011,6 +1070,89 @@ impl CanvasHost {
             self.hover_handle = cursor;
             cx.notify();
         }
+    }
+
+    // ------------------------------------------------------ shader animation
+
+    /// Shader nodes that animate now: selected (or inside the selection), visible, in an
+    /// active window (see `shader_anim::active`).
+    fn active_anim(&self, window: &Window, cx: &App) -> Vec<shader_anim::Candidate> {
+        let s = self.state.read(cx);
+        if s.loading || s.selection.is_empty() || !window.is_window_active() {
+            return Vec::new();
+        }
+        let sel: Vec<NodeKey> = s.selection.iter().map(|&i| key_of(i)).collect();
+        let cands = s.doc.shader_anim_candidates(&sel);
+        if cands.is_empty() {
+            return cands;
+        }
+        shader_anim::active(&cands, &self.visible_world(cx), true)
+    }
+
+    /// Starts the animation loop when some shader should animate. The loop ticks every
+    /// `shader_anim::FRAME` and ends as soon as nothing animates (no idle work).
+    fn ensure_anim(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.anim_task || self.active_anim(window, cx).is_empty() {
+            return;
+        }
+        self.anim_task = true;
+        cx.spawn_in(window, async move |this, cx| {
+            loop {
+                cx.background_executor().timer(shader_anim::FRAME).await;
+                let go = this
+                    .update_in(cx, |this, window, cx| this.anim_tick(window, cx))
+                    .unwrap_or(false);
+                if !go {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// One animation tick: advances the clocks and rebuilds the chunks of the animated
+    /// nodes (only when the previous frame finished rendering). False = stop.
+    fn anim_tick(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let active = self.active_anim(window, cx);
+        if active.is_empty() {
+            self.anim_task = false;
+            self.anim.stop();
+            let s = self.state.read(cx);
+            let live: std::collections::HashSet<NodeKey> = s
+                .doc
+                .shader_anim_candidates(&[])
+                .iter()
+                .map(|c| c.key)
+                .collect();
+            self.anim.retain(|k| live.contains(&k));
+            // Swap in the frame still rendering, if any.
+            self.state.update(cx, |s, cx| s.watch_assets(cx));
+            return false;
+        }
+        let now = std::time::Instant::now();
+        // Frames are requested every tick; no render for a while means the window is not
+        // drawing (minimized): pause the clocks and only poke it now and then, so the
+        // next render (window restored) resumes the animation.
+        let idle = now.duration_since(self.last_render);
+        if idle > shader_anim::STALL {
+            self.anim.stop();
+            if idle.as_millis() % 500 < shader_anim::FRAME.as_millis() * 2 {
+                cx.notify();
+            }
+            return true;
+        }
+        let busy = self.state.read(cx).doc.shaders_busy();
+        let frames = self.anim.tick(now, &active, self.pointer, busy);
+        // Only the canvas shows the new frame: the editor state is not notified (the
+        // panels observing it have nothing to redraw).
+        let changed = !busy && self.state.update(cx, |s, _| s.doc.animate_shaders(&frames));
+        if changed {
+            self.sync_from_state(cx);
+        }
+        if let Some(l) = &mut self.anim_log {
+            l.record(now, busy, changed, now.elapsed());
+        }
+        true
     }
 
     // ----------------------------------------------------------- text edit
@@ -1541,7 +1683,9 @@ fn paint_obb(
 }
 
 impl Render for CanvasHost {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.last_render = std::time::Instant::now();
+        self.ensure_anim(window, cx);
         let p = cx.pal();
         if p.dark != self.dark {
             self.dark = p.dark;

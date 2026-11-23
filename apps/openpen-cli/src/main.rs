@@ -1,5 +1,6 @@
-//! OpenPen headless CLI: `validate`, `migrate`, `render` and `mcp`.
+//! OpenPen headless CLI: `validate`, `migrate`, `render`, `export-code` and `mcp`.
 
+mod export_code;
 mod headless;
 
 use std::path::{Path, PathBuf};
@@ -61,7 +62,12 @@ enum Command {
         /// SVG/PDF: convert text to glyph outlines instead of real text.
         #[arg(long)]
         outline: bool,
+        /// `@time` (seconds) of animated shaders (default 0, like Pen's exports).
+        #[arg(long, default_value_t = 0.0)]
+        time: f32,
     },
+    /// Export a document (or nodes) as HTML + CSS or HTML + Tailwind into a directory.
+    ExportCode(export_code::ExportCodeArgs),
     /// MCP server for agents: bridges stdio to the running OpenPen app.
     Mcp {
         /// Socket name of the app instance (default: `desktop`).
@@ -105,6 +111,7 @@ fn main() -> ExitCode {
             theme,
             bg,
             outline,
+            time,
         } => run_render(
             &input,
             &output,
@@ -113,8 +120,10 @@ fn main() -> ExitCode {
             &theme,
             bg.as_deref(),
             outline,
+            time,
         )
         .map(|()| true),
+        Command::ExportCode(args) => export_code::run(&args).map(|()| true),
         Command::Mcp {
             socket,
             agent,
@@ -275,6 +284,7 @@ fn run_mcp(
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_render(
     input: &Path,
     output: &Path,
@@ -283,6 +293,7 @@ fn run_render(
     theme: &[(String, String)],
     bg: Option<&str>,
     outline: bool,
+    time: f32,
 ) -> Result<()> {
     use pen_render::{Color, Rect};
     let format = output
@@ -328,6 +339,7 @@ fn run_render(
     );
     pipe.set_script_runner(Box::new(pen_script::ScriptNodeRunner::new()));
     pipe.set_shader_renderer(std::sync::Arc::new(pen_shader::ShaderEngine::new()));
+    pipe.set_export_shader_time(time);
     pipe.rebuild(&mut scene);
     let (list, viewport) = match node {
         Some(id) => {

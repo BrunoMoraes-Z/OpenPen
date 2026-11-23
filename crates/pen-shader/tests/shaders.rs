@@ -393,3 +393,118 @@ fn legacy_library_examples_render() {
         s.errors
     );
 }
+
+const ANIMATED: &str = r#"/** @resolution */
+uniform vec2 u_resolution;
+/** @time */
+uniform float u_time;
+/** @mouse */
+uniform vec2 u_mouse;
+void main() {
+  gl_FragColor = vec4(fract(u_time), u_mouse / u_resolution, 1.0);
+}
+"#;
+
+const ANIM_DOC: &str = r##"{ "version": "2.22", "children": [
+  { "type": "frame", "id": "page", "x": 0, "y": 0, "width": 200, "height": 100, "fill": "#ffffff",
+    "layout": "none", "children": [
+      { "type": "rectangle", "id": "anim", "x": 0, "y": 0, "width": 200, "height": 100,
+        "fill": { "type": "shader", "url": "anim.glsl" } } ] },
+  { "type": "rectangle", "id": "other", "x": 300, "y": 0, "width": 50, "height": 50,
+    "fill": { "type": "shader", "url": "checker.glsl" } }
+] }"##;
+
+fn build_anim(d: &Path, engine: &ShaderEngine) -> (SceneDoc, Pipeline) {
+    std::fs::write(d.join("anim.glsl"), ANIMATED).unwrap();
+    let (mut scene, _) =
+        SceneDoc::load(ANIM_DOC.as_bytes(), Some(d), &pen_doc::NoLibraries).expect("load");
+    let mut pipe = Pipeline::new(TextEngine::new(), Box::new(NoAssets));
+    pipe.set_shader_renderer(Arc::new(engine.clone()));
+    pipe.rebuild(&mut scene);
+    (scene, pipe)
+}
+
+fn anim_px(list: &pen_render::DisplayList) -> [u8; 4] {
+    let p = pen_raster::render(list, Rect::new(0.0, 0.0, 200.0, 100.0), 1.0, Color::WHITE);
+    px(&p, 100, 50)
+}
+
+#[test]
+fn animated_time_and_mouse() {
+    let d = dir("animated");
+    write_shaders(&d);
+    let engine = ShaderEngine::with(ShaderLimits::cpu(), false);
+    let (scene, mut pipe) = build_anim(&d, &engine);
+    let k = scene.find("anim").unwrap();
+    let page = scene.find("page").unwrap();
+    // Only the animated node is reported, with the root to rebuild.
+    let animated: Vec<_> = pipe.animated_shaders().collect();
+    assert_eq!(animated.len(), 1);
+    assert_eq!(animated[0].0, k);
+    assert_eq!(animated[0].1.root, page);
+    assert!(animated[0].1.time && animated[0].1.mouse);
+    // Static output: t = 0, mouse at the center.
+    assert!(near(anim_px(&pipe.list), [0, 128, 128, 255], 3));
+    let other = pipe.list.chunks[1].clone();
+    // A frame: t = 0.5, mouse at a quarter of the node (y down -> GL y up).
+    let a = pen_layout::ShaderAnim {
+        time: 0.5,
+        mouse: Some(pen_render::Vec2::new(50.0, 25.0)),
+    };
+    let rebuilt = pipe.animate_shaders(&scene, &[(k, a)]);
+    assert_eq!(rebuilt, vec![page]);
+    assert!(
+        Arc::ptr_eq(&other, &pipe.list.chunks[1]),
+        "other chunk kept"
+    );
+    assert!(near(anim_px(&pipe.list), [128, 64, 191, 255], 3));
+    // Same state again: nothing to rebuild.
+    assert!(pipe.animate_shaders(&scene, &[(k, a)]).is_empty());
+    // Exports stay deterministic (t = 0, center).
+    let export = pipe.node_list(&scene, page);
+    assert!(near(anim_px(&export), [0, 128, 128, 255], 3));
+    // `render --time`: exports at another instant.
+    pipe.set_export_shader_time(0.25);
+    let export = pipe.node_list(&scene, page);
+    assert!(near(anim_px(&export), [64, 128, 128, 255], 3));
+}
+
+#[test]
+fn deferred_animation_keeps_previous_frame() {
+    let d = dir("animated-deferred");
+    write_shaders(&d);
+    let engine = ShaderEngine::with(ShaderLimits::cpu(), true);
+    let (scene, mut pipe) = build_anim(&d, &engine);
+    let k = scene.find("anim").unwrap();
+    let wait = |pipe: &mut Pipeline| {
+        let t0 = Instant::now();
+        while pipe.shaders_busy() && t0.elapsed() < Duration::from_secs(60) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        pipe.animate_shaders(&scene, &[])
+    };
+    wait(&mut pipe);
+    assert!(!pipe.has_pending_assets());
+    assert!(near(anim_px(&pipe.list), [0, 128, 128, 255], 3));
+    let a = pen_layout::ShaderAnim {
+        time: 0.5,
+        mouse: None,
+    };
+    pipe.animate_shaders(&scene, &[(k, a)]);
+    // While t = 0.5 renders, the t = 0 frame stays on screen (no flicker).
+    assert!(pipe.shaders_busy() || pipe.has_pending_assets());
+    if pipe.shaders_busy() {
+        assert!(near(anim_px(&pipe.list), [0, 128, 128, 255], 3));
+    }
+    wait(&mut pipe);
+    assert!(!pipe.has_pending_assets());
+    assert!(near(anim_px(&pipe.list), [128, 128, 128, 255], 3));
+    // Animation frames are marked transient (backends drop them once replaced).
+    let transient = pipe.list.chunks[0].items.iter().any(|it| match it {
+        pen_render::DisplayItem::Shape { fills, .. } => fills.iter().any(|f| {
+            matches!(f, pen_render::Paint::Image { image, .. } if image.id & pen_render::TRANSIENT_IMAGE != 0)
+        }),
+        _ => false,
+    });
+    assert!(transient);
+}

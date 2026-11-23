@@ -37,7 +37,7 @@ pub use engine::{
 };
 pub use host::{
     ExportFormat, ExportRequest, HeadlessHost, RenderTarget, SCREENSHOT_MAX_SIDE, ScriptHost,
-    export_images, render_rgba, screenshot_png,
+    export_code, export_images, render_rgba, screenshot_png,
 };
 pub use node_script::{
     InputDef, InputType, NodeScriptLimits, ScriptHeader, ScriptNodeRunner, coerce_inputs,

@@ -787,6 +787,57 @@ impl SceneDocument {
         true
     }
 
+    /// Nodes whose shaders use `@time` / `@mouse`, with their world box and whether
+    /// they (or an ancestor) are in `selection` (see [`crate::shader_anim`]).
+    pub fn shader_anim_candidates(
+        &self,
+        selection: &[NodeKey],
+    ) -> Vec<crate::shader_anim::Candidate> {
+        self.pipe
+            .animated_shaders()
+            .filter_map(|(key, info)| {
+                let obb = self.world_obb(key)?;
+                let mut k = Some(key);
+                let mut selected = false;
+                while let Some(c) = k {
+                    if selection.contains(&c) {
+                        selected = true;
+                        break;
+                    }
+                    k = self.scene.get(c).and_then(|n| n.parent);
+                }
+                Some(crate::shader_anim::Candidate {
+                    key,
+                    to_local: obb.t.inverse(),
+                    size: Vec2::new(obb.w, obb.h),
+                    aabb: obb.aabb(),
+                    selected,
+                    time: info.time,
+                    mouse: info.mouse,
+                })
+            })
+            .collect()
+    }
+
+    /// One shader animation frame (see [`Pipeline::animate_shaders`]). True if the
+    /// display list changed.
+    pub fn animate_shaders(&mut self, frames: &[(NodeKey, pen_layout::ShaderAnim)]) -> bool {
+        if self.pending {
+            return false;
+        }
+        if self.pipe.animate_shaders(&self.scene, frames).is_empty() {
+            return false;
+        }
+        self.list = Arc::new(self.pipe.list.clone());
+        self.revision = next_revision();
+        true
+    }
+
+    /// True while shader frames are rendering in the background.
+    pub fn shaders_busy(&self) -> bool {
+        self.pipe.shaders_busy()
+    }
+
     /// Runs the incremental layout/display-list update for pending ops.
     pub fn flush(&mut self) -> bool {
         if !self.pending {

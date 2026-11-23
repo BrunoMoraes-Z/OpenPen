@@ -271,7 +271,9 @@ impl<'a> Validator<'a> {
                 Severity::Warning,
                 DiagCode::UndefinedVariable,
                 location,
-                format!("variable ${name} is not defined"),
+                format!(
+                    "variable ${name} is not defined (for literal text starting with '$', write '\\${name}')"
+                ),
             );
         }
     }

@@ -9,6 +9,11 @@
 //! Like images, rendering may be deferred: [`ShaderLookup::Pending`] makes the builder
 //! skip the shader and remember the chunk; [`ShaderRenderer::take_ready`] reports that
 //! results arrived, and [`crate::Pipeline::refresh_assets`] rebuilds those chunks.
+//!
+//! Animation: shaders with `@time` / `@mouse` uniforms read them from a per-node
+//! [`ShaderAnim`] (set with [`crate::Pipeline::animate_shaders`]); without one they get
+//! t = 0 and the node center, as in Pen's exports. While a new frame renders, the engine
+//! answers [`ShaderLookup::Updating`] with the previous frame of the same slot (no flicker).
 
 use pen_doc::ParamValue;
 use pen_render::{DisplayList, ImageData, Rect, Shape, Vec2};
@@ -22,6 +27,38 @@ pub struct ShaderNeeds {
     pub object: bool,
     /// Some sampler is bound to `pencil:background`.
     pub backdrop: bool,
+    /// Declares a `@time` uniform.
+    pub time: bool,
+    /// Declares a `@mouse` uniform.
+    pub mouse: bool,
+}
+
+impl ShaderNeeds {
+    /// Uses `@time` or `@mouse` (Pen's `isAnimated`).
+    pub fn animated(&self) -> bool {
+        self.time || self.mouse
+    }
+}
+
+/// Animation inputs of one node's shaders (editor only; exports use the default).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ShaderAnim {
+    /// `@time`, in seconds.
+    pub time: f32,
+    /// `@mouse` in node-local units (y down, origin at the top-left corner); `None` =
+    /// the node center.
+    pub mouse: Option<Vec2>,
+}
+
+/// A node whose shaders are animated (recorded by the display-list builder).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnimatedShader {
+    /// Top-level root whose chunk draws the node (rebuild it to show a new frame).
+    pub root: pen_render::NodeKey,
+    /// Some shader of the node uses `@time`.
+    pub time: bool,
+    /// Some shader of the node uses `@mouse`.
+    pub mouse: bool,
 }
 
 /// One shader evaluation, in the node's local space (y down, origin at the node's
@@ -42,6 +79,13 @@ pub struct ShaderRequest {
     pub object: Option<Arc<DisplayList>>,
     /// `pencil:background` content, local space.
     pub backdrop: Option<Arc<DisplayList>>,
+    /// `@time` (seconds; 0 outside the editor).
+    pub time: f32,
+    /// `@mouse`, node-local, y down (`None` = node center).
+    pub mouse: Option<Vec2>,
+    /// Stable identity of the fill/effect (node + position) across frames, 0 = none: an
+    /// animated shader shows its last frame for this slot while the next one renders.
+    pub slot: u64,
     /// Identity of everything above (computed by the builder), for caching.
     pub key: u64,
 }
@@ -53,6 +97,8 @@ pub enum ShaderLookup {
     Ready(Arc<ImageData>),
     /// Being rendered in the background.
     Pending,
+    /// A newer frame of an animated shader is being rendered; this is the previous one.
+    Updating(Arc<ImageData>),
     /// Compile or runtime error.
     Failed(Arc<str>),
 }
@@ -64,6 +110,11 @@ pub trait ShaderRenderer: Send + Sync {
     fn render(&self, req: &ShaderRequest) -> ShaderLookup;
     /// True (once) when deferred renders finished since the last call.
     fn take_ready(&self) -> bool {
+        false
+    }
+    /// True while deferred renders are queued or running (the app waits for them before
+    /// advancing an animation).
+    fn busy(&self) -> bool {
         false
     }
 }

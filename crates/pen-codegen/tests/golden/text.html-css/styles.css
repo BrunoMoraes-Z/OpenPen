@@ -1,0 +1,116 @@
+*,
+::before,
+::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+p {
+  margin: 0;
+}
+
+img,
+svg {
+  display: block;
+}
+
+/* Layers paint in document order and position their absolute children, as in the design. */
+[data-pen-root],
+[data-pen-root] * {
+  position: relative;
+}
+
+.typography {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 24px;
+  width: 400px;
+  height: fit-content;
+  background-color: #ffffff;
+}
+
+.heading {
+  flex-shrink: 0;
+  font-family: "Inter", sans-serif;
+  font-size: 32px;
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: -0.5px;
+  background-image: linear-gradient(90deg, #2563eb 0%, #9333ea 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  white-space: pre;
+}
+
+.centered {
+  align-self: stretch;
+  flex-shrink: 0;
+  font-family: "Inter", sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  text-align: center;
+  color: #374151;
+  white-space: pre-wrap;
+}
+
+.decorated {
+  flex-shrink: 0;
+  font-family: "Inter", sans-serif;
+  font-size: 16px;
+  font-style: italic;
+  line-height: 1.2;
+  color: #dc2626;
+  text-decoration-line: underline;
+  white-space: pre;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  align-self: stretch;
+  height: 48px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  background-color: #f3f4f6;
+}
+
+.star {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  color: #f59e0b;
+}
+
+.grow {
+  flex: 1 1 0;
+  min-width: 0;
+  font-family: "Inter", sans-serif;
+  font-size: 14px;
+  line-height: 1.2;
+  color: #111827;
+  white-space: pre-wrap;
+}
+
+.badge {
+  width: 56px;
+  height: 28px;
+  flex-shrink: 0;
+  font-family: "Inter", sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: center;
+  color: #4f46e5;
+  white-space: pre-wrap;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}

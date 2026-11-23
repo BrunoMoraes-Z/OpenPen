@@ -319,6 +319,9 @@ pub(crate) struct TextureCache {
     images: HashMap<(u64, u8), CachedImage>,
     gradients: HashMap<GradKey, CachedImage>,
     avg: HashMap<u64, Color>,
+    /// Keys of cached [`pen_render::TRANSIENT_IMAGE`]s (animation frames), released as
+    /// soon as a frame is painted without them.
+    transient: Vec<(u64, u8)>,
     frame: u64,
 }
 
@@ -395,6 +398,9 @@ impl TextureCache {
         }
         let (w, h, bgra) = image_to_bgra(data, key.1 as f32 / 64.0, MAX_IMAGE_SIDE);
         let image = render_image_from_bgra(w, h, bgra)?;
+        if data.id & pen_render::TRANSIENT_IMAGE != 0 {
+            self.transient.push(key);
+        }
         self.images.insert(
             key,
             CachedImage {
@@ -436,6 +442,7 @@ impl TextureCache {
 
     pub(crate) fn begin_frame(&mut self, window: &mut Window) {
         self.frame += 1;
+        self.drop_transient(window);
         if !self.frame.is_multiple_of(120) {
             return;
         }
@@ -458,6 +465,32 @@ impl TextureCache {
         for img in dropped {
             let _ = window.drop_image(img);
         }
+    }
+}
+
+impl TextureCache {
+    /// Releases animation frames not drawn in the previous frame (a newer frame replaced
+    /// them), so animated shaders do not pile textures up in the atlas.
+    fn drop_transient(&mut self, window: &mut Window) {
+        if self.transient.is_empty() {
+            return;
+        }
+        let frame = self.frame;
+        let images = &mut self.images;
+        let avg = &mut self.avg;
+        self.transient.retain(|key| {
+            let Some(e) = images.get(key) else {
+                return false;
+            };
+            if frame - e.last_used <= 1 {
+                return true;
+            }
+            if let Some(e) = images.remove(key) {
+                let _ = window.drop_image(e.image);
+            }
+            avg.remove(&key.0);
+            false
+        });
     }
 }
 

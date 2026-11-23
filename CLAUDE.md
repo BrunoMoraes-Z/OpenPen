@@ -13,12 +13,13 @@ Editor de design nativo em Rust + GPUI, compatível com o formato `.pen` do Pen 
 | `crates/pen-render` | Cena resolvida → `DisplayList` (agnóstica de backend, sem GPUI) | glam |
 | `crates/pen-raster` | Backend CPU da `DisplayList` (tiny-skia + cosmic-text): headless, export PNG, testes golden | pen-render, pen-fonts |
 | `crates/pen-export` | Export vetorial da `DisplayList`: SVG (string determinística) e PDF (svg2pdf, fontes embutidas com subset); ver `docs/pen-export.md` | pen-render, pen-raster (texto em curvas, fallbacks raster), pen-fonts, svg2pdf, pdf-writer |
+| `crates/pen-codegen` | Export de código: subárvore do `SceneDoc` (+ layout) → HTML + CSS ou HTML + Tailwind v4 (flexbox, variáveis → custom properties com temas, SVG inline, assets); ver `docs/pen-codegen.md` | pen-doc, pen-layout, pen-schema, pen-render |
 | `crates/pen-shader` | Shaders GLSL (WebGL 1) de fill/effect: reescrita + naga, GPU headless (wgpu) com fallback de CPU (intérprete da IR). Plugado no `Pipeline` via `ShaderRenderer`. Ver `docs/scripts-shaders.md` | pen-layout, pen-raster, naga, wgpu |
 | `crates/pen-canvas` | Elemento GPUI que desenha a `DisplayList` na GPU (pan/zoom, culling, cache) | pen-render, pen-raster (fallback CPU p/ blend/blur/clips complexos), gpui-kit |
 | `crates/pen-mcp` | Servidor MCP (rmcp): ferramentas, stdio, socket local (named pipe / Unix socket) e shim; documentos via trait `ToolBackend` (ver `docs/pen-mcp.md`) | rmcp, tokio, interprocess (sem pen-doc nem GPUI) |
-| `crates/pen-script` | Motor do `execute` (MCP): JS em QuickJS (`rquickjs`) contra o documento, uma transação = um undo, limites, `editId`, globais por agente, streaming; `ScriptNodeRunner` dos nós `script` (`docs/scripts-shaders.md`) | pen-doc, pen-layout, pen-raster, pen-export |
+| `crates/pen-script` | Motor do `execute` (MCP): JS em QuickJS (`rquickjs`) contra o documento, uma transação = um undo, limites, `editId`, globais por agente, streaming; `ScriptNodeRunner` dos nós `script` (`docs/scripts-shaders.md`) | pen-doc, pen-layout, pen-raster, pen-export, pen-codegen |
 | `apps/openpen` | App GPUI: janela, abas, painéis, inspector, layers, toolbar | tudo |
-| `apps/openpen-cli` | Headless: `validate`, `migrate`, `render` (png/svg/pdf), `mcp` (shim stdio → app, ou `--headless FILE`) | núcleo, pen-mcp, pen-script, pen-shader, pen-export, sem GPUI |
+| `apps/openpen-cli` | Headless: `validate`, `migrate`, `render` (png/svg/pdf), `export-code` (html-css/html-tailwind), `mcp` (shim stdio → app, ou `--headless FILE`) | núcleo, pen-mcp, pen-script, pen-shader, pen-export, pen-codegen, sem GPUI |
 
 Regra: **nada de GPUI fora de `pen-canvas` e `apps/openpen`**. O núcleo precisa compilar e ser testável sem janela.
 

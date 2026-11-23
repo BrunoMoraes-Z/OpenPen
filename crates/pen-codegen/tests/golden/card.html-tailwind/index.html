@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Button</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <style>
+      @layer base {
+        [data-pen-root],
+        [data-pen-root] * {
+          position: relative;
+        }
+      }
+
+      :root {
+        --accent: #2563eb;
+        --surface: #ffffff;
+        --text: #111827;
+        --radius: 12;
+        --space: 16;
+      }
+
+      [data-mode="dark"] {
+        --surface: #111827;
+        --text: #f9fafb;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="w-[553.89px] h-[432.8px]" data-pen-root>
+      <div class="absolute left-0 top-[400px] flex items-center gap-[6px] py-[8px] px-[14px] w-fit h-fit rounded-[8px] bg-(color:--accent)" data-mode="light">
+        <svg class="w-[16px] h-[16px] shrink-0 text-[#ffffff]" viewBox="0 0 1000 1000" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M820 211Q815 212 811 215Q807 218 591 434L375 649L283 557Q191 465 184.5 462Q178 459 168.5 459Q159 459 152 461.5Q145 464 138.5 469.5Q132 475 129 482Q127 487 126.5 490Q126 493 126 500L126 503Q125 511 129 517Q134 525 155 546Q169 561 224 616L331 722Q351 741 359 746Q364 750 372 749L379 750Q384 750 389 748Q395 743 412 727.5Q429 712 469 673L632 510Q781 360 825 316Q869 272 871 267Q874 261 874 250Q874 243 873.5 240Q873 237 871 232Q868 226 861.5 220Q855 214 848.5 211.5Q842 209 833.5 209Q825 209 820 211Z" fill="currentColor"/>
+        </svg>
+        <p class="shrink-0 [font-family:'Inter',_sans-serif] text-[14px] font-semibold leading-[1.2] text-[#ffffff] whitespace-pre">Save</p>
+      </div>
+      <div class="absolute left-0 top-0 flex flex-col items-start gap-[calc(var(--space)_*_1px)] p-[calc(var(--space)_*_1px)] w-[360px] h-fit rounded-[calc(var(--radius)_*_1px)] bg-(color:--surface) [outline:1px_solid_#e5e7eb] [outline-offset:-1px] shadow-[0_4px_16px_0_#0000001f]" data-mode="light">
+        <p class="shrink-0 [font-family:'Inter',_sans-serif] text-[20px] font-bold leading-[1.2] text-(color:--text) whitespace-pre">Weekly report</p>
+        <p class="self-stretch shrink-0 [font-family:'Inter',_sans-serif] text-[14px] leading-[1.5] text-[#6b7280] whitespace-pre-wrap">Revenue grew 12% week over week &amp; churn stayed flat.</p>
+        <div class="self-stretch h-[1px] shrink-0 bg-[#e5e7eb]"></div>
+        <div class="flex justify-end items-start gap-[8px] self-stretch shrink-0">
+          <!-- component: Button -->
+          <div class="flex items-center gap-[6px] py-[8px] px-[14px] shrink-0 rounded-[8px] bg-[#f3f4f6]">
+            <p class="shrink-0 [font-family:'Inter',_sans-serif] text-[14px] font-semibold leading-[1.2] text-(color:--text) whitespace-pre">Cancel</p>
+          </div>
+          <!-- component: Button -->
+          <div class="flex items-center gap-[6px] py-[8px] px-[14px] shrink-0 rounded-[8px] bg-(color:--accent)">
+            <svg class="w-[16px] h-[16px] shrink-0 text-[#ffffff]" viewBox="0 0 1000 1000" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M820 211Q815 212 811 215Q807 218 591 434L375 649L283 557Q191 465 184.5 462Q178 459 168.5 459Q159 459 152 461.5Q145 464 138.5 469.5Q132 475 129 482Q127 487 126.5 490Q126 493 126 500L126 503Q125 511 129 517Q134 525 155 546Q169 561 224 616L331 722Q351 741 359 746Q364 750 372 749L379 750Q384 750 389 748Q395 743 412 727.5Q429 712 469 673L632 510Q781 360 825 316Q869 272 871 267Q874 261 874 250Q874 243 873.5 240Q873 237 871 232Q868 226 861.5 220Q855 214 848.5 211.5Q842 209 833.5 209Q825 209 820 211Z" fill="currentColor"/>
+            </svg>
+            <p class="shrink-0 [font-family:'Inter',_sans-serif] text-[14px] font-semibold leading-[1.2] text-[#ffffff] whitespace-pre">Save</p>
+          </div>
+        </div>
+      </div>
+      <div class="absolute left-[400px] top-0 flex flex-col items-start gap-[8px] p-[24px] w-fit h-fit rounded-[calc(var(--radius)_*_1px)] bg-(color:--surface)" data-mode="dark">
+        <p class="shrink-0 [font-family:'Inter',_sans-serif] text-[20px] font-bold leading-[1.2] text-(color:--text) whitespace-pre">Dark mode</p>
+        <!-- component: Button -->
+        <div class="flex items-center gap-[6px] py-[8px] px-[14px] shrink-0 rounded-[8px] bg-(color:--accent)">
+          <svg class="w-[16px] h-[16px] shrink-0 text-[#ffffff]" viewBox="0 0 1000 1000" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M820 211Q815 212 811 215Q807 218 591 434L375 649L283 557Q191 465 184.5 462Q178 459 168.5 459Q159 459 152 461.5Q145 464 138.5 469.5Q132 475 129 482Q127 487 126.5 490Q126 493 126 500L126 503Q125 511 129 517Q134 525 155 546Q169 561 224 616L331 722Q351 741 359 746Q364 750 372 749L379 750Q384 750 389 748Q395 743 412 727.5Q429 712 469 673L632 510Q781 360 825 316Q869 272 871 267Q874 261 874 250Q874 243 873.5 240Q873 237 871 232Q868 226 861.5 220Q855 214 848.5 211.5Q842 209 833.5 209Q825 209 820 211Z" fill="currentColor"/>
+          </svg>
+          <p class="shrink-0 [font-family:'Inter',_sans-serif] text-[14px] font-semibold leading-[1.2] text-[#ffffff] whitespace-pre">Save</p>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

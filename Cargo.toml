@@ -9,6 +9,7 @@ members = [
     "crates/pen-raster",
     "crates/pen-canvas",
     "crates/pen-export",
+    "crates/pen-codegen",
     "crates/pen-script",
     "crates/pen-shader",
     "crates/pen-mcp",
@@ -31,6 +32,7 @@ pen-render = { path = "crates/pen-render" }
 pen-raster = { path = "crates/pen-raster" }
 pen-canvas = { path = "crates/pen-canvas" }
 pen-export = { path = "crates/pen-export" }
+pen-codegen = { path = "crates/pen-codegen" }
 pen-script = { path = "crates/pen-script" }
 pen-shader = { path = "crates/pen-shader" }
 pen-mcp = { path = "crates/pen-mcp" }

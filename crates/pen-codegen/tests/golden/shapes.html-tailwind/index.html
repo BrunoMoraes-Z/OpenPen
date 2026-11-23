@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shapes</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <style>
+      @layer base {
+        [data-pen-root],
+        [data-pen-root] * {
+          position: relative;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="w-[420px] h-[260px] bg-[#f8fafc] overflow-hidden" data-pen-root>
+      <div class="absolute left-[20px] top-[20px] w-[120px] h-[80px] rounded-[16px_0] [background:linear-gradient(90deg,_#f97316_0%,_#db2777_100%)]"></div>
+      <div class="absolute left-[160px] top-[20px] w-[80px] h-[80px] rounded-full [background:radial-gradient(40px_40px_at_40px_40px,_#fde68a_0%,_#f59e0b_100%)] [outline:4px_solid_#92400e]"></div>
+      <svg class="absolute left-[260px] top-[20px] w-[80px] h-[80px]" viewBox="0 0 80 80" preserveAspectRatio="none" overflow="visible" xmlns="http://www.w3.org/2000/svg">
+        <path d="M80 40C80 17.91 62.09 0 40 0C17.91 0 0 17.91 0 40C0 62.09 17.91 80 40 80L40 64C26.75 64 16 53.25 16 40C16 26.75 26.75 16 40 16C53.25 16 64 26.75 64 40Z" fill="#10b981"/>
+      </svg>
+      <svg class="absolute left-[20px] top-[130px] w-[80px] h-[80px]" viewBox="0 0 80 80" preserveAspectRatio="none" overflow="visible" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <clipPath id="pen-c1">
+            <path d="M40 0L74.64 60L5.36 60L40 0Z"/>
+          </clipPath>
+        </defs>
+        <path d="M40 0L74.64 60L5.36 60L40 0Z" fill="#6366f1"/>
+        <path d="M40 0L74.64 60L5.36 60L40 0Z" fill="none" stroke="#312e81" stroke-width="6" clip-path="url(#pen-c1)"/>
+      </svg>
+      <svg class="absolute left-[120px] top-[140px] w-[140px] h-[60px]" viewBox="0 0 140 60" preserveAspectRatio="none" overflow="visible" xmlns="http://www.w3.org/2000/svg">
+        <path d="M0 30C35 -73.92 70 133.92 140 30" fill="none" stroke="#0ea5e9" stroke-width="4" stroke-linecap="round"/>
+      </svg>
+      <img class="absolute left-[290px] top-[130px] w-[100px] h-[100px] object-cover rounded-[12px] shadow-[0_2px_6px_0_#00000040]" src="assets/checker.png" alt="Photo">
+      <div class="absolute left-[360px] top-[40px] w-[40px] h-[40px] bg-[#a855f7] shadow-[inset_0_-1.5px_0_0_#581c87,_0_1.5px_0_0_#581c87] [transform:rotate(-30deg)] origin-top-left opacity-[0.8]"></div>
+    </div>
+  </body>
+</html>

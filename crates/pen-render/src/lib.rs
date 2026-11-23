@@ -136,6 +136,11 @@ pub enum ImageFit {
     Tile,
 }
 
+/// Bit set in [`ImageData::id`] of short-lived images (frames of animated shaders): a new
+/// one replaces the previous every frame, so backends may release them from their caches
+/// as soon as they are no longer drawn.
+pub const TRANSIENT_IMAGE: u64 = 1 << 63;
+
 /// Decoded image shared between items and backends. Backends key their GPU/CPU caches on `id`.
 #[derive(Debug)]
 pub struct ImageData {

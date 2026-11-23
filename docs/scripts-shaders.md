@@ -176,7 +176,9 @@ Felzenszwalb sobre a máscara de cobertura a 50 %, com ajuste sub-texel nas bord
 assinada em unidades do nó (positiva dentro), `gb` = gradiente unitário.
 
 Uniforms: valores de `uniforms` (número, booleano, `#hex`, arrays, `$var` já resolvida) ou
-`@default`; `@resolution` = tamanho do nó; `@mouse` sem valor = centro do nó; **`@time` = 0**.
+`@default`; `@resolution` = tamanho do nó; `@time` e `@mouse` vêm do estado de animação do nó
+(ver "Animação" abaixo); fora do editor (CLI, export, goldens) `@time` = 0 e `@mouse` = centro do
+nó, como nos exports do Pen.
 
 ### Fill, stroke e effect
 
@@ -205,6 +207,73 @@ Uniforms: valores de `uniforms` (número, booleano, `#hex`, arrays, `$var` já r
   (`SHADER_ERROR`) e a mensagem fica em `ShaderEngine::stats().errors`; um efeito com erro deixa
   o nó como se não tivesse o efeito.
 
+### Animação (`@time`, `@mouse`)
+
+Comportamento do Pen, conferido no bundle (`animatingNodes`, `advanceAnimation`, `makeNodeShader`):
+
+- Um shader é "animado" se declara um uniform `@time` ou `@mouse` (`isAnimated`).
+- **Só anima o que está selecionado**: o conjunto de nós animados é refeito a cada mudança de
+  seleção e contém os nós selecionados e seus descendentes que têm shader animado (mais o slide
+  atual no modo apresentação, que não existe aqui). Os outros mostram o último quadro.
+- `@time` é um relógio **por nó**, em segundos, que só avança enquanto o nó anima (selecionar de
+  novo continua de onde parou). O passo de cada quadro é limitado a 0,1 s; enquanto o quadro
+  anterior ainda não apareceu, o tempo acumula e entra todo no próximo passo.
+- `@mouse` é o ponteiro em unidades locais do nó, convenção GL (origem embaixo à esquerda:
+  `[x, altura - y]`), suavizado a cada quadro: `alvo + (atual - alvo)·e^(-5·dt)`. Começa no
+  centro e segue o ponteiro em qualquer lugar do canvas (não só sobre o nó); sem ponteiro fica onde
+  está. `@mouse` não aceita `@default` no Pen.
+- Exports (PNG/SVG/PDF e afins) usam t = 0 e o centro do nó.
+
+No OpenPen:
+
+- **pen-layout**: `ShaderRequest` ganhou `time`, `mouse` (local, y para baixo; o motor converte
+  para GL) e `slot` (identidade estável nó + posição do fill/effect). O builder guarda um
+  `ShaderAnim` por nó (`set_shader_anim`), põe o tempo/mouse na chave só dos shaders que os usam
+  (os estáticos não mudam de chave: goldens iguais) e registra os nós animados com a raiz cujo
+  chunk os desenha (`animated_shaders`). `Pipeline::animate_shaders(scene, &[(nó, ShaderAnim)])`
+  aplica um quadro: reconstrói **só os chunks** desses nós (e os que esperavam resultados
+  prontos), mantendo os outros `Arc`s. `node_list` (export de um nó) ignora o estado de animação;
+  `set_export_shader_time` muda o t dos exports (`openpen-cli render --time <s>`).
+- **pen-shader**: no motor adiado, shaders animados não passam pelo cache comum (256 entradas que
+  os quadros esvaziariam): cada `slot` guarda o último quadro pronto e no máximo um quadro em
+  renderização. Pedido com chave nova → enfileira (se nada estiver rodando nesse slot) e responde
+  `ShaderLookup::Updating(quadro anterior)`: o builder desenha o quadro anterior e marca o chunk
+  como pendente — sem piscar. `busy()` diz se há trabalho na fila. Os quadros levam o bit
+  `pen_render::TRANSIENT_IMAGE` no id.
+- **pen-canvas**: imagens transitórias saem do atlas da GPU assim que um frame é pintado sem
+  elas (antes ficariam 600 frames; a 40 fps isso seriam centenas de MB).
+- **app** (`apps/openpen/src/shader_anim.rs`, lógica pura com testes; `canvas_host.rs`): anima os
+  nós que estão na seleção (ou dentro dela) **e** cruzam a área visível do canvas, com a janela
+  ativa. Um laço com timer de 16 ms (limite de 60 fps; no Windows o timer dá ~40 ticks/s) avança
+  os relógios e chama `animate_shaders`; se o motor ainda está ocupado, o tick só acumula tempo
+  (como o Pen). O quadro vai direto para o canvas, sem notificar o `EditorState` (painéis não
+  redesenham). O laço termina quando nada anima (seleção vazia, nó fora da tela, janela inativa)
+  e recomeça no próximo `render` do canvas (mudança de seleção, pan/zoom, volta da janela). Se o
+  canvas para de renderizar por 300 ms (janela minimizada, mesmo que o SO ainda a dê como ativa) os
+  relógios pausam e o laço só cutuca a janela a cada 0,5 s. O ponteiro do documento vem dos
+  eventos de movimento do canvas.
+- `OPENPEN_ANIM_LOG=1` grava em `%TEMP%/openpen.log` quadros/s e custo no thread de UI a cada 2 s.
+
+Números (release, GPU dedicada):
+
+| Caso | Valor |
+|---|---|
+| `cargo bench -p pen-shader --bench anim`: tick no thread de UI (avança o tempo de 4 fills fbm 300×200 numa página com 400 retângulos, reconstrói o chunk e enfileira) | **0,09 ms** |
+| idem, quadro inteiro (tick + 4 renderizações de 240 k px na GPU + leitura + troca) | **2,3 ms** |
+| app, demo com 3 shaders animados (`target/shader-anim-demo/`), zoom 91 % | ~40 quadros/s, 0,06 ms/tick no thread de UI, 11–15 % de um núcleo no processo |
+| app, mesmo documento com a página fora da tela / nada selecionado | 0,0 % |
+| app, janela minimizada com a seleção animada | ~1 % (timer de 16 ms ocioso) |
+
+O custo de CPU restante ao animar é principalmente do canvas (conversão RGBA pré-multiplicada →
+BGRA e upload de ~1,7 MB por shader por quadro, a 2 px por unidade) e do redesenho da janela.
+Antes desta mudança cada consulta a um programa fazia um `stat` do arquivo (dezenas de µs no
+Windows, várias por shader por build): agora o arquivo é reverificado no máximo a cada 0,5 s, o que
+levou o tick do benchmark de 1,9 ms para 0,09 ms.
+
+Capturas: `docs/screenshots/shader-anim-1.png`, `-2.png`, `-3.png` (app release, a página
+selecionada; o gradiente e o fbm mudam entre as capturas e o anel do círculo segue o ponteiro,
+em cima à esquerda na primeira e embaixo à direita nas outras).
+
 ### Números (release, 16 núcleos, GPU dedicada)
 
 - Biblioteca do legado: **122/122** shaders (`goodies/shaders` + `shader-library/assets`)
@@ -227,7 +296,11 @@ pela CLI).
 
 ## Lacunas conhecidas
 
-- `@time` é estático (t = 0): sem animação. `@mouse` não acompanha o ponteiro.
+- Animação: sem modo apresentação (no Pen o slide atual também anima); a resolução do quadro
+  animado é a mesma do estático (até 2 px por unidade), sem reduzir para economizar; um nó animado
+  dentro de uma raiz grande reconstrói o chunk inteiro da raiz a cada quadro (barato até centenas
+  de nós; não há patch só da imagem). Erros de execução de um shader animado são tentados de novo a
+  cada quadro.
 - `pencil:background` só vê o mesmo chunk e não é invalidado quando outro chunk muda.
 - Shader effects são aplicados após os outros efeitos, não na posição da lista.
 - A resolução do shader é limitada pelo orçamento (até 2 px por unidade); com zoom alto ou export

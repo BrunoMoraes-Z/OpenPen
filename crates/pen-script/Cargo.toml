@@ -12,6 +12,7 @@ pen-layout.workspace = true
 pen-render.workspace = true
 pen-raster.workspace = true
 pen-export.workspace = true
+pen-codegen.workspace = true
 serde_json.workspace = true
 indexmap.workspace = true
 image.workspace = true

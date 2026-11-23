@@ -31,3 +31,7 @@ doctest = false
 [[bench]]
 name = "shader"
 harness = false
+
+[[bench]]
+name = "anim"
+harness = false

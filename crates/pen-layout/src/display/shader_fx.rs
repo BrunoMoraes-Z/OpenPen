@@ -5,7 +5,9 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use pen_doc::ShaderSpec;
 
 use super::*;
-use crate::shader::{ShaderLookup, ShaderNeeds, ShaderRenderer, ShaderRequest};
+use crate::shader::{
+    AnimatedShader, ShaderAnim, ShaderLookup, ShaderNeeds, ShaderRenderer, ShaderRequest,
+};
 
 /// Drawn where a shader failed to compile or run.
 pub const SHADER_ERROR: Color = Color::rgba(0.9, 0.1, 0.5, 0.25);
@@ -90,6 +92,8 @@ impl DisplayListBuilder {
         hash_shader(sh, &mut h);
         size.x.to_bits().hash(&mut h);
         size.y.to_bits().hash(&mut h);
+        let anim = self.anim_for(needs, &mut h);
+        let slot = self.slot(0, index.unwrap_or(usize::MAX), &sh.url);
         let mut object = None;
         let mut backdrop = None;
         let mut shape = None;
@@ -133,6 +137,9 @@ impl DisplayListBuilder {
             })),
             object,
             backdrop,
+            time: anim.time,
+            mouse: anim.mouse,
+            slot,
             key: h.finish(),
         };
         match r.render(&req) {
@@ -142,6 +149,15 @@ impl DisplayListBuilder {
                 opacity: sh.opacity * alpha,
                 scale: 1.0,
             },
+            ShaderLookup::Updating(image) => {
+                self.pending_roots.insert(self.cur_root);
+                Paint::Image {
+                    image,
+                    fit: ImageFit::Stretch,
+                    opacity: sh.opacity * alpha,
+                    scale: 1.0,
+                }
+            }
             ShaderLookup::Pending => {
                 self.pending_roots.insert(self.cur_root);
                 Paint::Solid(Color::TRANSPARENT)
@@ -191,10 +207,11 @@ impl DisplayListBuilder {
         let mut content_hash = hc.finish();
         let mut out: Option<Arc<ImageData>> = None;
         let mut backdrop_cache: Option<(Option<Arc<DisplayList>>, u64)> = None;
-        for sh in shaders {
+        for (i, sh) in shaders.iter().enumerate() {
             let needs = r.needs(&sh.url, base_dir.as_deref());
             let mut h = DefaultHasher::new();
             hash_shader(sh, &mut h);
+            let anim = self.anim_for(needs, &mut h);
             content_hash.hash(&mut h);
             for v in [size.x, size.y, region.x, region.y, region.w, region.h] {
                 v.to_bits().hash(&mut h);
@@ -217,9 +234,19 @@ impl DisplayListBuilder {
                 shape: None,
                 object: Some(Arc::new(list_of(content.clone(), region))),
                 backdrop,
+                time: anim.time,
+                mouse: anim.mouse,
+                slot: self.slot(1, i, &sh.url),
                 key: h.finish(),
             };
-            match r.render(&req) {
+            let lookup = match r.render(&req) {
+                ShaderLookup::Updating(img) => {
+                    self.pending_roots.insert(self.cur_root);
+                    ShaderLookup::Ready(img)
+                }
+                l => l,
+            };
+            match lookup {
                 ShaderLookup::Ready(img) => {
                     content_hash = img.id;
                     content = vec![image_item(img.clone(), region)];
@@ -230,7 +257,7 @@ impl DisplayListBuilder {
                     out = None;
                     break;
                 }
-                ShaderLookup::Failed(_) => {
+                ShaderLookup::Failed(_) | ShaderLookup::Updating(_) => {
                     out = None;
                     break;
                 }
@@ -249,6 +276,57 @@ impl DisplayListBuilder {
             // Pending or failed: the node as if it had no shader effect.
             None => cx.add_bounds(world_bounds),
         }
+    }
+}
+
+impl DisplayListBuilder {
+    /// Animation inputs of a shader of the node being emitted (hashed into `h` when the
+    /// shader uses them) and records the node as animated.
+    fn anim_for(&mut self, needs: ShaderNeeds, h: &mut DefaultHasher) -> ShaderAnim {
+        if !needs.animated() {
+            return ShaderAnim::default();
+        }
+        let base = ShaderAnim {
+            time: self.export_time,
+            mouse: None,
+        };
+        let node = self.cur_node;
+        let a = if self.exporting {
+            base
+        } else {
+            self.anim.get(&node).copied().unwrap_or(base)
+        };
+        let a = ShaderAnim {
+            time: if needs.time { a.time } else { 0.0 },
+            mouse: if needs.mouse { a.mouse } else { None },
+        };
+        a.time.to_bits().hash(h);
+        a.mouse.map(|m| (m.x.to_bits(), m.y.to_bits())).hash(h);
+        if self.exporting {
+            return a;
+        }
+        let e = self.animated.entry(node).or_insert(AnimatedShader {
+            root: self.cur_root,
+            time: false,
+            mouse: false,
+        });
+        e.root = self.cur_root;
+        e.time |= needs.time;
+        e.mouse |= needs.mouse;
+        a
+    }
+}
+
+impl DisplayListBuilder {
+    /// Stable identity of a shader fill (`kind` 0) or effect (`kind` 1) of the node being
+    /// emitted; 0 (no slot) for exports, which must not reuse editor frames.
+    fn slot(&self, kind: u8, index: usize, url: &str) -> u64 {
+        if self.exporting {
+            return 0;
+        }
+        let mut h = DefaultHasher::new();
+        (self.cur_node.0, kind, index, url).hash(&mut h);
+        h.finish() | 1
     }
 }
 

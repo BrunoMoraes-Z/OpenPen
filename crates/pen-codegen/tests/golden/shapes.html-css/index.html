@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shapes</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="shapes" data-pen-root>
+      <div class="gradient"></div>
+      <div class="circle"></div>
+      <svg class="arc" viewBox="0 0 80 80" preserveAspectRatio="none" overflow="visible" xmlns="http://www.w3.org/2000/svg">
+        <path d="M80 40C80 17.91 62.09 0 40 0C17.91 0 0 17.91 0 40C0 62.09 17.91 80 40 80L40 64C26.75 64 16 53.25 16 40C16 26.75 26.75 16 40 16C53.25 16 64 26.75 64 40Z" fill="#10b981"/>
+      </svg>
+      <svg class="triangle" viewBox="0 0 80 80" preserveAspectRatio="none" overflow="visible" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <clipPath id="pen-c1">
+            <path d="M40 0L74.64 60L5.36 60L40 0Z"/>
+          </clipPath>
+        </defs>
+        <path d="M40 0L74.64 60L5.36 60L40 0Z" fill="#6366f1"/>
+        <path d="M40 0L74.64 60L5.36 60L40 0Z" fill="none" stroke="#312e81" stroke-width="6" clip-path="url(#pen-c1)"/>
+      </svg>
+      <svg class="wave" viewBox="0 0 140 60" preserveAspectRatio="none" overflow="visible" xmlns="http://www.w3.org/2000/svg">
+        <path d="M0 30C35 -73.92 70 133.92 140 30" fill="none" stroke="#0ea5e9" stroke-width="4" stroke-linecap="round"/>
+      </svg>
+      <img class="photo" src="assets/checker.png" alt="Photo">
+      <div class="tilted"></div>
+    </div>
+  </body>
+</html>

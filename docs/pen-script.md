@@ -119,7 +119,9 @@ let resp = eng.execute(&mut scene, &mut pipe, &mut undo, &mut pen_script::Headle
 
 - `Generate` não existe (erro explicativo). `Export` faz `png`/`jpeg`/`webp` (webp sem perdas) e,
   via pen-export, `svg` e `pdf` vetoriais (texto real, fontes embutidas no PDF; escala padrão 1
-  em vez de 2). HTML (`html-css`, `html-tailwind`) dá erro "not supported yet".
+  em vez de 2). `html-css` / `html-tailwind` geram código via pen-codegen (`host::export_code`):
+  todos os alvos numa página; `outputPath` é um diretório (`index.html`, `styles.css`, `assets/`)
+  ou um arquivo `.html` (ver `docs/pen-codegen.md`).
 - Funções da API são síncronas (sem `Promise`); jobs pendentes são executados depois de cada
   pedaço.
 - `includePathGeometry` é ignorado. `resolveVariables` usa o tema de cada nó quando ele está na cena.

@@ -148,11 +148,55 @@ impl Pipeline {
         node_world_rect(scene, &self.layout, k)
     }
 
-    /// A display list with only the subtree of `k` (for exporting one node).
+    /// A display list with only the subtree of `k` (for exporting one node). Animated
+    /// shaders render at t = 0 with `@mouse` at the node center (like Pen's exports).
     pub fn node_list(&mut self, scene: &SceneDoc, k: NodeKey) -> DisplayList {
         self.display
-            .build_chunk(scene, &self.layout, k)
+            .build_export_chunk(scene, &self.layout, k)
             .into_iter()
             .collect()
+    }
+
+    /// Nodes whose shaders use `@time` / `@mouse` (see [`crate::AnimatedShader`]).
+    pub fn animated_shaders(
+        &self,
+    ) -> impl Iterator<Item = (NodeKey, crate::shader::AnimatedShader)> + '_ {
+        self.display.animated_shaders()
+    }
+
+    /// One animation frame: sets the `@time` / `@mouse` of `frames`' nodes and rebuilds,
+    /// in place, the chunks drawing them, plus the chunks waiting for deferred results
+    /// that arrived. Other chunks are kept (same `Arc`s). Returns the rebuilt roots.
+    pub fn animate_shaders(
+        &mut self,
+        scene: &SceneDoc,
+        frames: &[(NodeKey, crate::shader::ShaderAnim)],
+    ) -> Vec<NodeKey> {
+        let mut roots: Vec<NodeKey> = Vec::new();
+        for &(k, a) in frames {
+            if self.display.shader_anim(k) == Some(a) {
+                continue;
+            }
+            self.display.set_shader_anim(k, Some(a));
+            if let Some(info) = self.display.animated_shader(k) {
+                roots.push(info.root);
+            }
+        }
+        if self.display.take_ready() {
+            roots.extend(self.display.pending_roots());
+        }
+        self.display
+            .rebuild_roots(scene, &self.layout, &mut self.list, roots)
+    }
+
+    /// `@time` (seconds) of animated shaders in exports and in nodes the editor does not
+    /// animate (default 0). Takes effect on the next build of each chunk.
+    pub fn set_export_shader_time(&mut self, t: f32) {
+        self.display.set_export_shader_time(t);
+    }
+
+    /// True while the shader engine has deferred renders queued or running.
+    pub fn shaders_busy(&self) -> bool {
+        self.display.shaders_busy()
     }
 }

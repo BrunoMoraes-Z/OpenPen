@@ -4790,6 +4790,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "pen-codegen",
  "pen-doc",
  "pen-export",
  "pen-layout",
@@ -4946,6 +4947,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pen-codegen"
+version = "0.1.0"
+dependencies = [
+ "pen-doc",
+ "pen-layout",
+ "pen-render",
+ "pen-schema",
+ "pretty_assertions",
+ "smallvec",
+]
+
+[[package]]
 name = "pen-doc"
 version = "0.1.0"
 dependencies = [
@@ -5066,6 +5079,7 @@ dependencies = [
  "criterion",
  "image",
  "indexmap",
+ "pen-codegen",
  "pen-doc",
  "pen-export",
  "pen-layout",

@@ -43,6 +43,8 @@ fn run(c: &Compiled, gpu: bool, raster: &mut pen_raster::RasterContext) {
             backdrop: None,
             threads: 0,
             gpu,
+            time: 0.0,
+            mouse: None,
         },
         raster,
     );

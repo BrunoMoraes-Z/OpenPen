@@ -63,7 +63,7 @@ function FindEmptySpace(input: { width: number; height: number; direction?: "rig
 // Output
 function Print(...values: unknown[]): void;
 function TakeScreenshot(nodeIds: string[]): void;
-function Export(nodeIds: string[], format: "png" | "jpeg" | "webp" | "svg" | "pdf", outputPath: string, options?: { scale?: number; quality?: number }): void;
+function Export(nodeIds: string[], format: "png" | "jpeg" | "webp" | "svg" | "pdf" | "html-css" | "html-tailwind", outputPath: string, options?: { scale?: number; quality?: number }): void;
 
 interface GetOptions {
   depth?: number;             // without visitor: levels of children to include (0 = node only;
@@ -191,6 +191,16 @@ each node becomes `<nodeId>.<ext>` (`"document"` becomes `document.<ext>`). `png
 `webp` are bitmaps whose `scale` (pixels per design unit) defaults to 2; `quality` (1-100)
 applies to JPEG. `svg` and `pdf` are vector files with real, selectable text (fonts embedded in
 the PDF); their `scale` defaults to 1. The written paths are listed in the response.
+
+`html-css` and `html-tailwind` export code instead: all the listed nodes go into **one** page.
+`outputPath` is a directory that receives `index.html` (or a path ending in `.html` for that
+file), plus `styles.css` for `html-css` and an `assets/` folder with the image fills. Flex
+frames become CSS flexbox (`fit_content` hugs, `fill_container` becomes `flex: 1` / `align-self:
+stretch`), other children are absolutely positioned, variables become CSS custom properties
+(`var(--name)`, theme values under `[data-<axis>="<value>"]`), icons and vector shapes become
+inline SVG and component instances are repeated markup preceded by a `<!-- component: Name -->`
+comment. `html-tailwind` uses Tailwind v4 utilities (arbitrary values where needed) and loads
+Tailwind from its CDN. Name layers well: the CSS class names come from the layer names.
 
 ### Generate
 

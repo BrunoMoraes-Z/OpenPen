@@ -536,8 +536,20 @@ Export([{id:?}, \"document\"], \"pdf\", {out:?})"
     assert!(r.exported[2].ends_with("document.pdf"));
     assert!(r.text.contains(".svg"), "{}", r.text);
     let _ = std::fs::remove_dir_all(&dir);
-    let r = h.run(&format!("Export([{id:?}], \"html-css\", \"x\")"));
-    assert!(!r.ok && r.text.contains("not supported"), "{}", r.text);
+    // Code export (pen-codegen): a directory gets index.html (+ styles.css).
+    let r = h.ok(&format!("Export([{id:?}], \"html-css\", {out:?})"));
+    assert_eq!(r.exported.len(), 2, "{:?}", r.exported);
+    assert!(r.exported[0].ends_with("index.html"));
+    let css = std::fs::read_to_string(&r.exported[1]).unwrap();
+    assert!(css.contains("background-color: #ff0000;"), "{css}");
+    let html_file = format!("{out}/tw/page.html");
+    let r = h.ok(&format!(
+        "Export([{id:?}], \"html-tailwind\", {html_file:?})"
+    ));
+    assert_eq!(r.exported.len(), 1, "{:?}", r.exported);
+    let html = std::fs::read_to_string(&r.exported[0]).unwrap();
+    assert!(html.contains("bg-[#ff0000]"), "{html}");
+    let _ = std::fs::remove_dir_all(&dir);
     let r = h.run("Generate(\"ai\", \"x\", \"a cat\")");
     assert!(!r.ok && r.text.contains("not supported"), "{}", r.text);
 }
@@ -636,4 +648,39 @@ fn json_print_formats() {
     assert_eq!(v, serde_json::json!({"a": 1, "b": [true, null]}));
     let r = h.ok("Print(\"x\", 1, undefined, [1])");
     assert_eq!(r.prints, ["x 1 undefined [1]"]);
+}
+
+#[test]
+fn literal_dollar_text_warns_and_escape_is_silent() {
+    let mut h = H::new(EMPTY);
+    h.ok(r##"SetVariables({brand: {type: "color", value: "#336699"}})"##);
+    let r = h.ok(
+        r##"price = Insert(document, {type: "text", name: "Price", content: "$18,420", fill: "$brand"})"##,
+    );
+    let hits: Vec<_> = r
+        .warnings
+        .iter()
+        .filter(|w| w.contains("undefined variable"))
+        .collect();
+    assert_eq!(hits.len(), 1, "{:?}", r.warnings);
+    assert!(hits[0].contains("'$18,420'") && hits[0].contains(r"\$18,420"));
+    assert!(hits[0].starts_with("Price: "), "{}", hits[0]);
+
+    // Update is checked too; an escaped literal and a defined variable are silent.
+    let r = h.ok(r##"Update(price, {content: "$9"})"##);
+
+    assert!(
+        r.warnings.iter().any(|w| w.contains("'$9'")),
+        "{:?}",
+        r.warnings
+    );
+    let r = h.ok(
+        r##"Update(price, {content: "\\$18,420", fill: "$brand"}); Print(Get(price).content)"##,
+    );
+    assert_eq!(r.prints, [r"\$18,420"]);
+    assert!(
+        !r.warnings.iter().any(|w| w.contains("undefined variable")),
+        "{:?}",
+        r.warnings
+    );
 }

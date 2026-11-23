@@ -74,7 +74,7 @@ impl ExportFormat {
 pub struct ExportRequest {
     pub targets: Vec<RenderTarget>,
     pub format: ExportFormat,
-    /// Absolute output path: a directory for image formats, a file for HTML.
+    /// Absolute output path: a directory (for HTML also an `.html` file).
     pub output: PathBuf,
     /// Scale factor: device pixels (png/jpeg/webp, default 2) or output units
     /// (svg px / pdf pt, default 1) per document unit.
@@ -182,13 +182,7 @@ pub fn export_images(
 ) -> Result<Vec<PathBuf>, String> {
     let fmt = req.format;
     if matches!(fmt, ExportFormat::HtmlTailwind | ExportFormat::HtmlCss) {
-        return Err(format!(
-            "export format '{}' is not supported yet (use png, jpeg, webp, svg or pdf)",
-            match fmt {
-                ExportFormat::HtmlTailwind => "html-tailwind",
-                _ => "html-css",
-            }
-        ));
+        return export_code(scene, pipe, req);
     }
     std::fs::create_dir_all(&req.output)
         .map_err(|e| format!("cannot create {}: {e}", req.output.display()))?;
@@ -221,6 +215,45 @@ pub fn export_images(
         out.push(path);
     }
     Ok(out)
+}
+
+/// HTML + CSS / HTML + Tailwind (pen-codegen): every target in one page. `output` is a
+/// directory (`index.html`, `styles.css`, `assets/`) or an `.html` file (the stylesheet and
+/// the assets go next to it).
+pub fn export_code(
+    scene: &SceneDoc,
+    pipe: &mut Pipeline,
+    req: &ExportRequest,
+) -> Result<Vec<PathBuf>, String> {
+    let format = match req.format {
+        ExportFormat::HtmlTailwind => pen_codegen::CodeFormat::HtmlTailwind,
+        _ => pen_codegen::CodeFormat::HtmlCss,
+    };
+    let mut roots = Vec::new();
+    for t in &req.targets {
+        match t {
+            RenderTarget::Document => roots.extend_from_slice(scene.roots()),
+            RenderTarget::Node { key, .. } => roots.push(*key),
+        }
+    }
+    roots.dedup();
+    let out = pen_codegen::generate(
+        scene,
+        &pipe.layout,
+        &roots,
+        &pen_codegen::CodegenOptions::with_format(format),
+    );
+    let is_file = req
+        .output
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("html") || e.eq_ignore_ascii_case("htm"));
+    let html = if is_file {
+        req.output.clone()
+    } else {
+        req.output.join(pen_codegen::HTML_FILE)
+    };
+    out.write_html_as(&html)
+        .map_err(|e| format!("cannot write {}: {e}", html.display()))
 }
 
 fn write_image(

@@ -8,7 +8,7 @@ the top-level nodes (screens, components, notes). Every node is an object with a
 
 | Kind | Form | Notes |
 |---|---|---|
-| Variable reference | `"$name"` | Allowed wherever a number, color, string or boolean is expected (also inside padding, corner radii, gradient stops). |
+| Variable reference | `"$name"` | Allowed wherever a number, color, string or boolean is expected (also inside padding, corner radii, gradient stops). **Any** string starting with `$` is read as a reference, so literal text such as a price must be escaped: `"\$18,420"` in the file, `"\\$18,420"` in JS. |
 | Color | `"#RGB"`, `"#RRGGBB"`, `"#RRGGBBAA"` | Transparency only through the alpha digits. |
 | Size | number, `"fit_content"`, `"fill_container"`, or with a fallback: `"fit_content(320)"` | See Layout. No percentages. |
 | Position | `x`, `y` numbers | Relative to the parent's top-left; ignored for children of a flex frame unless `layoutPosition: "absolute"`. |

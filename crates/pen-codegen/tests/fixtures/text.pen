@@ -1,0 +1,33 @@
+{
+  "version": "2.22",
+  "children": [
+    {
+      "type": "frame", "id": "typo", "name": "Typography", "x": 0, "y": 0, "width": 400,
+      "layout": "vertical", "padding": 24, "gap": 12, "fill": "#FFFFFF",
+      "children": [
+        { "type": "text", "id": "h1", "name": "Heading", "content": "Hello <world>",
+          "fontFamily": "Inter", "fontSize": 32, "fontWeight": "800", "letterSpacing": -0.5,
+          "fill": { "type": "gradient", "gradientType": "linear", "rotation": 270,
+            "colors": [ { "color": "#2563EB", "position": 0 }, { "color": "#9333EA", "position": 1 } ] } },
+        { "type": "text", "id": "center", "name": "Centered", "textGrowth": "fixed-width", "width": "fill_container",
+          "textAlign": "center", "content": "Centered paragraph that wraps\nacross two explicit lines.",
+          "fontFamily": "Inter", "fontSize": 14, "lineHeight": 1.6, "fill": "#374151" },
+        { "type": "text", "id": "deco", "name": "Decorated", "content": "Underlined italic",
+          "fontFamily": "Inter", "fontSize": 16, "fontStyle": "italic", "underline": true, "fill": "#DC2626" },
+        { "type": "frame", "id": "row", "name": "Row", "width": "fill_container", "height": 48,
+          "alignItems": "center", "gap": 8, "fill": "#F3F4F6", "cornerRadius": 8, "padding": [0, 12],
+          "children": [
+            { "type": "icon", "id": "star", "name": "Star", "library": "lucide", "icon": "star",
+              "width": 20, "height": 20, "fill": "#F59E0B" },
+            { "type": "text", "id": "grow", "name": "Grow", "textGrowth": "fixed-width", "width": "fill_container",
+              "content": "Fills the row", "fontFamily": "Inter", "fontSize": 14, "fill": "#111827" },
+            { "type": "text", "id": "badge", "name": "Badge", "textGrowth": "fixed-width-height",
+              "width": 56, "height": 28, "textAlign": "center", "textAlignVertical": "middle",
+              "content": "NEW", "fontFamily": "Inter", "fontSize": 12, "fontWeight": "700",
+              "fill": "#4F46E5", "strikethrough": false }
+          ]
+        }
+      ]
+    }
+  ]
+}
