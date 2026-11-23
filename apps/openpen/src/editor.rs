@@ -308,6 +308,11 @@ impl Editor {
                 cx.listener(|t, _: &AlignVCenter, _, cx| t.align(None, Some(Align::Center), cx)),
             )
             .on_action(cx.listener(|t, _: &AlignBottom, _, cx| t.align(None, Some(Align::End), cx)))
+            .on_action(cx.listener(|t, _: &ShowChat, window, cx| {
+                t.sidebar_open = true;
+                t.layers.update(cx, |l, cx| l.show_chat(window, cx));
+                cx.notify();
+            }))
             .on_action(cx.listener(|t, _: &ToggleUi, _, cx| {
                 t.ui_hidden = !t.ui_hidden;
                 cx.notify();

@@ -10,6 +10,7 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 use super::model::{DropTarget, LayerId, LayerKind, drop_target, row_index};
+use crate::chat::panel::ChatPanel;
 use crate::editor_state::{ContextMenuReq, EditorState};
 use crate::inspector::model::LayoutMode;
 use crate::layers::model::LayerTreeSource;
@@ -93,6 +94,8 @@ pub struct LayersPanel {
     focus: FocusHandle,
     /// Last `EditorState::reveal_tick` handled (scroll-into-view).
     revealed: u64,
+    /// The chat of this document (created when the Chat tab first shows).
+    chat: Option<Entity<ChatPanel>>,
     _subs: Vec<Subscription>,
 }
 
@@ -107,8 +110,27 @@ impl LayersPanel {
             drag: None,
             focus: cx.focus_handle(),
             revealed: 0,
+            chat: None,
             _subs: subs,
         }
+    }
+
+    fn chat(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<ChatPanel> {
+        if let Some(c) = &self.chat {
+            return c.clone();
+        }
+        let state = self.state.clone();
+        let c = cx.new(|cx| ChatPanel::new(state, window, cx));
+        self.chat = Some(c.clone());
+        c
+    }
+
+    /// Shows the Chat tab and focuses its composer (Ctrl+K).
+    pub fn show_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.tab = SidebarTab::Chat;
+        let chat = self.chat(window, cx);
+        chat.update(cx, |c, cx| c.focus_input(window, cx));
+        cx.notify();
     }
 
     fn start_rename(&mut self, id: LayerId, window: &mut Window, cx: &mut Context<Self>) {
@@ -651,9 +673,10 @@ impl Render for LayersPanel {
                 .pt(px(6.))
                 .pb(px(4.))
                 .into_any_element(),
-            SidebarTab::Chat | SidebarTab::History => self.render_empty(
-                "No agent connected",
-                "The agent chat is not available in this build yet.",
+            SidebarTab::Chat => self.chat(window, cx).into_any_element(),
+            SidebarTab::History => self.render_empty(
+                "Chat history",
+                "Earlier conversations of this document are saved; the newest one reopens in the Chat tab.",
                 cx,
             ),
             SidebarTab::Slides => {
@@ -676,9 +699,15 @@ impl Render for LayersPanel {
             .flex_col()
             .text_color(p.card_fg)
             .child(self.render_tabs(cx))
-            .child(self.render_header(cx))
-            .child(body)
+            .when(self.tab != SidebarTab::Chat, |d| {
+                d.child(self.render_header(cx))
+            })
+            .child(div().flex_1().min_h_0().flex().flex_col().child(body))
             .on_click(cx.listener(|this, ev: &ClickEvent, _, cx| {
+                // Clicks in the chat never clear the canvas selection.
+                if this.tab == SidebarTab::Chat {
+                    return;
+                }
                 // A drag that ended inside the panel is not a click.
                 if let ClickEvent::Mouse(m) = ev {
                     let d = m.up.position - m.down.position;

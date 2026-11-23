@@ -18,6 +18,8 @@ cosmic-text.workspace = true
 pen-mcp.workspace = true
 pen-script.workspace = true
 pen-shader.workspace = true
+# Embedded chat (docs/chat.md).
+pen-agent.workspace = true
 futures = "0.3"
 # Home: recents store, thumbnails (pen-raster), dates.
 pen-raster.workspace = true
@@ -31,6 +33,9 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_System_Threading"] }
 
 [dev-dependencies]
+# Chat tests: the API engine against a mock Messages API.
+wiremock = "0.6"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 
 [lib]
 path = "src/lib.rs"

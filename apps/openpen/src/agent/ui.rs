@@ -61,7 +61,7 @@ pub fn claude_add_command(cli: &std::path::Path, socket: Option<&str>) -> String
 pub fn agents_pill(p: &Palette, cx: &App) -> Stateful<Div> {
     let agents = cx
         .try_global::<AgentHub>()
-        .map(|h| h.agents.clone())
+        .map(|h| h.external_agents())
         .unwrap_or_default();
     let (hover, fg) = (p.hover, p.fg);
     let pill = div()
@@ -183,7 +183,7 @@ pub fn open_connect_dialog(window: &mut Window, cx: &mut App) {
                     ),
                     _ => "The MCP server is not running.".into(),
                 },
-                h.agents.clone(),
+                h.external_agents(),
             ),
             None => ("The MCP server is not running.".into(), Vec::new()),
         };

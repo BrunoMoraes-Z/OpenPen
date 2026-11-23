@@ -1131,7 +1131,9 @@ impl Render for Workspace {
             .on_action(|_: &OpenSettings, w, cx| Self::not_yet("Settings", w, cx))
             .on_action(|_: &CommandPalette, w, cx| Self::not_yet("The command palette", w, cx))
             .on_action(|_: &ShowShortcuts, w, cx| Self::not_yet("The shortcuts dialog", w, cx))
-            .on_action(|_: &ShowChat, w, cx| Self::not_yet("The agent chat", w, cx))
+            .on_action(|_: &ShowChat, w, cx| {
+                w.push_notification("Open a document to chat with the agent about it.", cx)
+            })
             .on_action(|_: &ConnectAgent, w, cx| crate::agent::ui::open_connect_dialog(w, cx))
             .on_action(|_: &FindLayers, w, cx| Self::not_yet("Find layers", w, cx))
             .on_action(cx.listener(|t, _: &Quit, w, cx| {

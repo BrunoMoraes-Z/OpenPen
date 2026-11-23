@@ -26,6 +26,9 @@ pub struct AgentInfo {
     pub name: String,
     /// RGB.
     pub color: u32,
+    /// The embedded chat (or its Claude Code MCP connection): shown on the
+    /// canvas, but not in the connected-agents pill.
+    pub internal: bool,
 }
 
 /// Rendering services for `TakeScreenshot` / `Export`: the CPU defaults

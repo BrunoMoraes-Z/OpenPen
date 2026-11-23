@@ -165,8 +165,10 @@ diz "node not found").
 
 ## Lacunas
 
-- A UI não mostra que o documento está travado (as edições só não acontecem). O chat embutido
-  deve mostrar o estado e oferecer "stop" (`stream_cancel`).
+- O chat embutido (`docs/chat.md`) mostra a trava com uma faixa e um botão Stop. Fora do painel
+  de chat, a trava continua invisível: as edições só não acontecem.
+- Parciais que chegam depois do `execute` final (o chat os repassa pela thread da UI, e o final vem
+  pelo MCP) são ignorados: o coordenador lembra os últimos 256 `tool_use_id` encerrados.
 - O divisor é heurístico: uma fronteira falsa faz o stream falhar (e voltar ao início no canvas),
   mas o final refaz do zero e o resultado é o mesmo.
 - Screenshots/exports do snippet só acontecem na finalização.

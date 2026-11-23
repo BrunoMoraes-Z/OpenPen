@@ -255,7 +255,8 @@ fallback ligado). Corpo:
 - Sem WebSearch/WebFetch no motor da API (ferramentas de servidor). Só o CLI tem.
 - Sem UI de permissão (allow / auto / deny). O CLI roda com `dontAsk` e allowlist fixa.
 - O CLI herda hooks e configurações do usuário (por exemplo, hooks `SessionStart`). Para isolar,
-  passe `--setting-sources` em `CliConfig::extra_args`.
+  passe `--setting-sources ""` em `CliConfig::extra_args`. O chat do app faz isso por padrão
+  (`docs/chat.md`).
 - O `steer` no CLI depende de como o Claude Code trata mensagens que chegam durante um turno (fila
   interna). Não foi testado contra o CLI real.
 - O `display: "summarized"` do thinking e o cache real não foram verificados contra a API real

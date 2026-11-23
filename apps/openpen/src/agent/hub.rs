@@ -50,6 +50,9 @@ pub struct AgentHub {
     /// The channel to the dispatcher, for in-process agents (the chat):
     /// tool calls through `ToolBackend` and the streaming updates.
     pub backend: GuiBackend,
+    /// Embedded chat sessions: agent id (API engine) or MCP agent name
+    /// (Claude Code engine, `OpenPen Chat#<marker>`) -> (label, color).
+    chats: HashMap<String, (String, u32)>,
 }
 
 impl Global for AgentHub {}
@@ -59,18 +62,67 @@ impl AgentHub {
         if let Some(a) = self.agents.iter().find(|a| a.client_id == ctx.client_id) {
             return a.clone();
         }
-        let a = AgentInfo {
-            client_id: ctx.client_id.clone(),
-            name: ctx.agent_name.clone(),
-            color: color_for(self.colors_used),
+        let chat = self
+            .chats
+            .get(&ctx.client_id)
+            .or_else(|| self.chats.get(&ctx.agent_name))
+            .cloned();
+        let a = match chat {
+            Some((name, color)) => AgentInfo {
+                client_id: ctx.client_id.clone(),
+                name,
+                color,
+                internal: true,
+            },
+            None => {
+                self.colors_used += 1;
+                AgentInfo {
+                    client_id: ctx.client_id.clone(),
+                    name: ctx.agent_name.clone(),
+                    color: color_for(self.colors_used - 1),
+                    internal: false,
+                }
+            }
         };
-        self.colors_used += 1;
         self.agents.push(a.clone());
         a
     }
 
     pub fn names(&self) -> Vec<String> {
         self.agents.iter().map(|a| a.name.clone()).collect()
+    }
+
+    /// Agents connected from outside (the pill and the connect dialog).
+    pub fn external_agents(&self) -> Vec<AgentInfo> {
+        self.agents
+            .iter()
+            .filter(|a| !a.internal)
+            .cloned()
+            .collect()
+    }
+
+    /// Registers an embedded chat session under `id` (its in-process agent
+    /// id, or the MCP agent name its Claude Code process connects with):
+    /// its edits show `label` on the canvas, in a color of its own.
+    pub fn register_chat(&mut self, id: &str, label: &str) -> u32 {
+        if let Some((_, c)) = self.chats.get(id) {
+            return *c;
+        }
+        let color = color_for(self.colors_used);
+        self.colors_used += 1;
+        self.chats
+            .insert(id.to_string(), (label.to_string(), color));
+        color
+    }
+
+    /// Forgets a chat session registered with [`Self::register_chat`].
+    pub fn unregister_chat(&mut self, id: &str) {
+        self.chats.remove(id);
+    }
+
+    /// The socket name the MCP server listens on, if it is running.
+    pub fn socket(&self) -> Option<&str> {
+        self.socket_name.as_deref()
     }
 
     /// Info of an agent by id, registering it (named after the id) if it
@@ -136,6 +188,7 @@ pub fn start(window: AnyWindowHandle, ws: WeakEntity<Workspace>, cx: &mut App) {
         socket_name,
         server_error,
         backend,
+        chats: HashMap::new(),
     });
     cx.on_app_quit(|cx| {
         if let Some(s) = cx.global_mut::<AgentHub>().server.take() {

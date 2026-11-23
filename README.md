@@ -148,6 +148,27 @@ Nothing is written to disk until the agent calls `save`. Add `--readonly` to kee
 }
 ```
 
+### Embedded chat
+
+OpenPen also has its own chat: press **Ctrl+K** (or open the **Chat** tab of the left sidebar) in any
+document. The agent edits that document live. Edits stream onto the canvas while the model is still
+writing the code, and each `execute` is one undo step. Conversations are saved per document and
+reopen with it.
+
+Two engines, picked in the chat header:
+
+- **Claude Code** (default) runs **your installed Claude Code** (`claude` on PATH), on your own
+  account and subscription, connected to the app through `openpen-cli mcp`. By default it ignores
+  your personal Claude Code hooks, plugins and settings (`--setting-sources ""`). Turn on **Use my
+  Claude Code settings** to load them.
+- **Anthropic API** calls the Messages API directly with your key. Paste the key in the chat
+  settings. It is stored in the system credential store (Windows Credential Manager), never in
+  OpenPen's files, and only a masked form is shown afterwards. `ANTHROPIC_API_KEY` also works. API
+  usage is billed per token to your Anthropic Console account.
+
+Model (Sonnet / Opus / Haiku, or an API model id) and effort are set in the same popover. Details:
+[`docs/chat.md`](docs/chat.md).
+
 ### MCP tools
 
 | Tool | What it does |
@@ -260,7 +281,8 @@ The core compiles and is tested without a window. GPUI is used only in `pen-canv
 | `pen-script` | The `execute` engine and `script` nodes (QuickJS through rquickjs), transactional. |
 | `pen-shader` | GLSL shaders for fills/effects (naga front-end, wgpu on the GPU, CPU evaluator), animated `@time`/`@mouse`. |
 | `pen-mcp` | MCP server ([rmcp](https://github.com/modelcontextprotocol/rust-sdk)): stdio, local socket and shim, decoupled from the engine through a `ToolBackend` trait. |
-| `apps/openpen` | The GPUI app: windows, tabs, Home, layers, inspector, toolbar, tools, agent integration. |
+| `pen-agent` | Agent core of the embedded chat: Claude Code CLI or Anthropic Messages API engines, one normalized event stream. |
+| `apps/openpen` | The GPUI app: windows, tabs, Home, layers, inspector, toolbar, tools, agent integration, embedded chat. |
 | `apps/openpen-cli` | Headless CLI: `validate`, `migrate`, `render`, `export-code`, `mcp` (shim and headless server). |
 
 ```mermaid
@@ -321,19 +343,19 @@ OpenPen is young and under active development. Windows is the only platform test
 - [x] Animated shaders (`@time`, `@mouse`)
 - [x] MCP server, live agent editing with cursor and flash, headless MCP mode
 - [x] Home screen with recents and previews
+- [x] Embedded chat panel (Claude Code or the Anthropic API, an agent loop inside the app)
+- [x] Streaming `execute` (edits appear on the canvas while the agent is still writing the code)
 
 **Planned**
 
-- [ ] Embedded chat panel (an agent loop inside the app)
 - [ ] AI image generation (`Generate`) and stock images
 - [ ] Browser import (capture a live web page into a design)
-- [ ] Streaming `execute` (show edits while the agent is still writing the code; the engine already supports it)
 - [ ] macOS and Linux builds
 
 ## Documentation
 
 The design and implementation notes in [`docs/`](docs/) are written in **Portuguese (pt-BR)**. Good starting points:
-[`pen-mcp.md`](docs/pen-mcp.md) (MCP server), [`agent-integration.md`](docs/agent-integration.md) (live agents in the app),
+[`pen-mcp.md`](docs/pen-mcp.md) (MCP server), [`agent-integration.md`](docs/agent-integration.md) (live agents in the app), [`chat.md`](docs/chat.md) (embedded chat), [`streaming-execute.md`](docs/streaming-execute.md) (streaming `execute`),
 [`pen-script.md`](docs/pen-script.md) (the `execute` engine), [`pen-canvas.md`](docs/pen-canvas.md) (GPU canvas) and
 [`pen-schema-notes.md`](docs/pen-schema-notes.md) (file format), [`pen-codegen.md`](docs/pen-codegen.md) (HTML/CSS export)
 and [`scripts-shaders.md`](docs/scripts-shaders.md) (scripts and shaders). The agent skill files in [`skills/openpen/`](skills/openpen/) are in English.

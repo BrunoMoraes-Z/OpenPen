@@ -22,7 +22,7 @@
 //! - 60 s without a new prefix cancels (rolls back) the stream; closing the
 //!   document or disconnecting the agent cancels it too.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use pen_script::{ExecuteRequest, ExecuteResponse, PartialStatus, ScriptEngine, complete_prefix};
@@ -161,8 +161,16 @@ pub struct StreamCoordinator<D> {
     /// agent's stream (Claude Code CLI: partials from the chat, final call
     /// over MCP), so its later calls share that agent's globals.
     aliases: HashMap<String, String>,
+    /// Tool use ids whose stream ended or whose final call already ran
+    /// (most recent last): a partial that arrives late for one of them
+    /// (the chat forwards deltas on the UI thread, the final call comes over
+    /// MCP) must not open a new stream.
+    finished: VecDeque<String>,
     log: Vec<String>,
 }
+
+/// How many finished tool use ids are remembered.
+const FINISHED_CAP: usize = 256;
 
 impl<D: Clone + PartialEq> StreamCoordinator<D> {
     pub fn new(engine: ScriptEngine) -> Self {
@@ -171,8 +179,19 @@ impl<D: Clone + PartialEq> StreamCoordinator<D> {
             config: StreamConfig::default(),
             streams: Vec::new(),
             aliases: HashMap::new(),
+            finished: VecDeque::new(),
             log: Vec::new(),
         }
+    }
+
+    fn mark_finished(&mut self, tool_use_id: &str) {
+        if self.finished.iter().any(|t| t == tool_use_id) {
+            return;
+        }
+        if self.finished.len() >= FINISHED_CAP {
+            self.finished.pop_front();
+        }
+        self.finished.push_back(tool_use_id.to_string());
     }
 
     pub fn streams(&self) -> &[Stream<D>] {
@@ -220,6 +239,9 @@ impl<D: Clone + PartialEq> StreamCoordinator<D> {
         prefix: String,
         now: Instant,
     ) {
+        if self.finished.iter().any(|t| t == tool_use_id) {
+            return;
+        }
         if let Some(i) = self.streams.iter().position(|s| s.agent == agent) {
             let s = &mut self.streams[i];
             if s.tool_use_id == tool_use_id && s.doc == doc {
@@ -296,6 +318,7 @@ impl<D: Clone + PartialEq> StreamCoordinator<D> {
 
     fn end<H: StreamHost<Doc = D>>(&mut self, host: &mut H, i: usize, why: &str) {
         let s = self.streams.remove(i);
+        self.mark_finished(&s.tool_use_id);
         if s.phase == Phase::Live && !host.cancel(&s.doc, &mut self.engine, &s.agent) {
             self.engine.discard_stream(&s.agent);
         }
@@ -427,6 +450,12 @@ impl<D: Clone + PartialEq> StreamCoordinator<D> {
         mut req: ExecuteRequest,
     ) -> Outcome {
         let engine_agent = self.engine_agent(client);
+        if let Some(t) = tool_use_id
+            && !self.streams.iter().any(|s| s.tool_use_id == t)
+        {
+            // Final call without (or before) its partials.
+            self.mark_finished(t);
+        }
         let found = tool_use_id
             .and_then(|t| self.streams.iter().position(|s| s.tool_use_id == t))
             .or_else(|| self.streams.iter().position(|s| s.agent == engine_agent));
@@ -441,6 +470,7 @@ impl<D: Clone + PartialEq> StreamCoordinator<D> {
                     .is_some_and(|src| src.starts_with(s.done.as_str()));
             if continues {
                 let s = self.streams.remove(i);
+                self.mark_finished(&s.tool_use_id);
                 if s.agent != client {
                     self.aliases.insert(client.to_string(), s.agent.clone());
                 }
@@ -985,5 +1015,41 @@ mod tests {
         c.doc_closed(&mut h, |d| *d == 0);
         assert!(c.streams().is_empty());
         assert!(!c.engine.has_stream("chat"));
+    }
+
+    #[test]
+    fn late_partials_after_the_final_call_are_ignored() {
+        let (mut c, mut h) = setup(1);
+        let t = Instant::now();
+        // The final call arrived over MCP before the chat forwarded the
+        // partials of the same tool call: it runs normally...
+        match c.execute(&mut h, "client-3", Some("t1"), &0, req("client-3", SRC)) {
+            Outcome::Done { resp, streamed } => assert!(resp.ok && !streamed),
+            o => panic!("{o:?}"),
+        }
+        assert_eq!(h.doc(0).undo_steps(), 1);
+        // ...and the late partials do not open a stream (no lock, no
+        // duplicated nodes).
+        c.partial(&mut h, "chat", "t1", 0, SRC[..40].into(), t);
+        c.pump(&mut h, t);
+        assert!(c.streams().is_empty());
+        assert_eq!(h.doc(0).stream_lock(), None);
+        assert_eq!(roots(&h, 0), 2);
+        // Same after a finalized or cancelled stream.
+        let cut = SRC
+            .find(
+                "
+b",
+            )
+            .unwrap()
+            + 2;
+        c.partial(&mut h, "chat", "t2", 0, SRC[..cut].into(), t);
+        c.pump(&mut h, t);
+        assert!(c.cancel(&mut h, "chat", Some("t2")));
+        c.partial(&mut h, "chat", "t2", 0, SRC.into(), ms(t, 20));
+        assert!(c.streams().is_empty());
+        // A new tool call still streams.
+        c.partial(&mut h, "chat", "t3", 0, SRC[..cut].into(), ms(t, 40));
+        assert_eq!(c.streams().len(), 1);
     }
 }

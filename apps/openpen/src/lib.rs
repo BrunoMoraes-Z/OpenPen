@@ -11,6 +11,7 @@ pub mod actions;
 pub mod agent;
 pub mod assets;
 pub mod canvas_host;
+pub mod chat;
 pub mod clipboard;
 pub mod document;
 pub mod editor;
