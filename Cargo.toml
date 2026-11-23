@@ -10,6 +10,7 @@ members = [
     "crates/pen-canvas",
     "crates/pen-export",
     "crates/pen-script",
+    "crates/pen-shader",
     "crates/pen-mcp",
     "apps/openpen",
     "apps/openpen-cli",
@@ -31,6 +32,7 @@ pen-raster = { path = "crates/pen-raster" }
 pen-canvas = { path = "crates/pen-canvas" }
 pen-export = { path = "crates/pen-export" }
 pen-script = { path = "crates/pen-script" }
+pen-shader = { path = "crates/pen-shader" }
 pen-mcp = { path = "crates/pen-mcp" }
 
 anyhow = "1"

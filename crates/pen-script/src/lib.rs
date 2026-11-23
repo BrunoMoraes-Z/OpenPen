@@ -24,6 +24,7 @@ mod app_state;
 mod engine;
 pub mod errors;
 pub mod host;
+mod node_script;
 mod nodes;
 mod resolve;
 pub mod stream;
@@ -37,6 +38,10 @@ pub use engine::{
 pub use host::{
     ExportFormat, ExportRequest, HeadlessHost, RenderTarget, SCREENSHOT_MAX_SIDE, ScriptHost,
     export_images, render_rgba, screenshot_png,
+};
+pub use node_script::{
+    InputDef, InputType, NodeScriptLimits, ScriptHeader, ScriptNodeRunner, coerce_inputs,
+    parse_header, prepare_output,
 };
 pub use nodes::ROOT_ALIASES;
 pub use stream::complete_prefix;

@@ -7,6 +7,9 @@
 //! drag is one undo step; every pointer move applies absolute values and runs
 //! the incremental pipeline update.
 
+mod gradient;
+mod vector;
+
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -14,6 +17,7 @@ use pen_canvas::DesignCanvas;
 use pen_doc::{Kind, NodeFlags, NodeKey};
 use pen_render::{Affine2, Rect, Vec2};
 
+use crate::actions;
 use crate::editor_state::{ContextMenuReq, EditorState};
 use crate::fonts;
 use crate::geom::{
@@ -101,6 +105,8 @@ enum Gesture {
     Pan {
         last: Point<Pixels>,
     },
+    /// Pen tool / vector edit mode (`vector.rs`).
+    Vector(Box<vector::Drag>),
 }
 
 struct TextEdit {
@@ -128,6 +134,10 @@ pub struct CanvasHost {
     dark: bool,
     /// Alt held: distance measurements to the hovered node.
     alt: bool,
+    /// Vector edit mode / pen tool session.
+    vector: Option<vector::Session>,
+    /// Drag of a gradient handle / stop (see `gradient.rs`).
+    grad: Option<gradient::GradDrag>,
     _subs: Vec<Subscription>,
 }
 
@@ -179,6 +189,8 @@ impl CanvasHost {
             text_edit: None,
             dark: false,
             alt: false,
+            vector: None,
+            grad: None,
             _subs: subs,
         };
         this.sync_from_state(cx);
@@ -229,6 +241,7 @@ impl CanvasHost {
             self.synced_zoom = z;
             self.canvas.update(cx, |c, cx| c.zoom_to(z, None, cx));
         }
+        self.vector_sync(cx);
         cx.notify();
     }
 
@@ -326,6 +339,26 @@ impl CanvasHost {
         None
     }
 
+    /// A pointer gesture is in progress (between button down and up).
+    fn gesture_active(&self) -> bool {
+        !matches!(self.gesture, Gesture::None)
+    }
+
+    /// Enter on a single selected path: vector edit mode.
+    fn enter_selected_path(&mut self, cx: &mut Context<Self>) -> bool {
+        match self.state.read(cx).selection.as_slice() {
+            [one] => self.enter_vector(key_of(*one), cx),
+            _ => false,
+        }
+    }
+
+    /// Arrow keys: nudge the selected points in vector edit mode.
+    fn nudge_points(&mut self, dx: f32, dy: f32, cx: &mut Context<Self>) {
+        if !self.vector_nudge(dx, dy, cx) {
+            cx.propagate();
+        }
+    }
+
     fn label_at(&self, p: Point<Pixels>) -> Option<NodeKey> {
         self.labels
             .iter()
@@ -347,6 +380,12 @@ impl CanvasHost {
         let tool = self.state.read(cx).tool;
         let m = ev.modifiers;
         let deep = m.secondary(cx);
+        if self.gradient_down(ev, cx) {
+            return;
+        }
+        if self.vector_down(ev, p, window, cx) {
+            return;
+        }
         match tool {
             Tool::Hand => {
                 self.gesture = Gesture::Pan { last: ev.position };
@@ -388,7 +427,9 @@ impl CanvasHost {
     ) {
         let shift = ev.modifiers.shift;
         // 1. Handles / rotation zone of the current selection.
+        // (Hidden while a gradient is edited, like Pen.)
         if ev.click_count < 2
+            && !self.gradient_active(cx)
             && let Some((h, rotate)) = self.handle_at(sp, cx)
         {
             self.start_transform(h, rotate, p, cx);
@@ -416,12 +457,16 @@ impl CanvasHost {
                 }
             })
         };
-        // Double click on a text node: edit it.
+        // Double click on a text node: edit it; on a path: edit its points.
         if ev.click_count >= 2
             && let Some(k) = target
         {
             let s = self.state.read(cx);
             let was_selected = s.selection.contains(&id_of(k));
+            if (was_selected || s.selection.len() <= 1) && self.enter_vector(k, cx) {
+                return;
+            }
+            let s = self.state.read(cx);
             if let Some(t) = s.doc.get(k).and_then(|n| n.text())
                 && (was_selected || s.selection.len() <= 1)
             {
@@ -765,6 +810,7 @@ impl CanvasHost {
                 let v = Vec2::new(f32::from(d.x), f32::from(d.y));
                 self.canvas.update(cx, |c, cx| c.pan_by(v, cx));
             }
+            Gesture::Vector(_) => self.vector_drag_move(ev, cx),
             Gesture::Press { .. } | Gesture::None => {}
         }
         cx.notify();
@@ -849,6 +895,7 @@ impl CanvasHost {
                     s.set_tool(Tool::Move, cx);
                 });
             }
+            Gesture::Vector(d) => self.vector_up(*d, cx),
             Gesture::Marquee { .. } | Gesture::Pan { .. } | Gesture::None => {}
         }
         cx.notify();
@@ -906,13 +953,25 @@ impl CanvasHost {
         if !matches!(self.gesture, Gesture::None) || ev.pressed_button.is_some() {
             return;
         }
+        if let Some(c) = self.gradient_cursor(ev, cx) {
+            if self.hover_handle != Some(c) || self.hover.is_some() {
+                self.hover_handle = Some(c);
+                self.hover = None;
+                cx.notify();
+            }
+            return;
+        }
+        if self.vector.is_some() {
+            self.vector_hover(ev, cx);
+            return;
+        }
         if self.alt != ev.modifiers.alt {
             self.alt = ev.modifiers.alt;
             cx.notify();
         }
         let sp = Vec2::new(f32::from(ev.position.x), f32::from(ev.position.y));
         let tool = self.state.read(cx).tool;
-        let handle = if matches!(tool, Tool::Move | Tool::Scale) {
+        let handle = if matches!(tool, Tool::Move | Tool::Scale) && !self.gradient_active(cx) {
             self.handle_at(sp, cx)
         } else {
             None
@@ -1155,7 +1214,7 @@ impl CanvasHost {
             {
                 outlines.push((o, node_color(doc.get(h)), 1.5));
             }
-            for &id in &s.selection {
+            for &id in s.selection.iter().filter(|_| self.vector.is_none()) {
                 if let Some(o) = doc.world_obb(key_of(id)) {
                     outlines.push((o, node_color(doc.get(key_of(id))), 1.0));
                 }
@@ -1170,6 +1229,7 @@ impl CanvasHost {
             if let Some((o, single)) = sel_box
                 && !creating
                 && self.text_edit.is_none()
+                && self.vector.is_none()
             {
                 let color = if single {
                     node_color(s.selection.first().and_then(|&i| doc.get(key_of(i))))
@@ -1181,7 +1241,7 @@ impl CanvasHost {
                 }
                 let a = o.aabb();
                 let tiny = a.w * zoom < 16.0 || a.h * zoom < 16.0;
-                if !matches!(self.gesture, Gesture::Move { .. }) {
+                if !matches!(self.gesture, Gesture::Move { .. }) && !self.gradient_active(cx) {
                     for h in Handle::ALL {
                         if tiny && !h.is_corner() {
                             continue;
@@ -1370,9 +1430,11 @@ impl CanvasHost {
             if let Some(t) = measure_target {
                 paint_obb(window, &Obb::from_rect(t), &to_s, rgb_u(SNAP), 1.0);
             }
+            self.paint_vector(window, &to_s, cx);
             for m in &measures {
                 paint_measure(window, cx, family, m, &to_s);
             }
+            self.paint_gradient(window, &to_s, cx);
             crate::agent::paint::paint(window, cx, &fx_rings, &fx_cursors, &to_s, zoom, family);
         });
     }
@@ -1513,6 +1575,51 @@ impl Render for CanvasHost {
                 }
             }))
             .on_mouse_move(cx.listener(Self::on_hover_move))
+            .on_action(cx.listener(|t, _: &actions::Deselect, _, cx| {
+                if !t.vector_escape(cx) {
+                    cx.propagate();
+                }
+            }))
+            .on_action(cx.listener(|t, _: &actions::SelectChildren, _, cx| {
+                if !t.vector_enter(cx) && !t.enter_selected_path(cx) {
+                    cx.propagate();
+                }
+            }))
+            .on_action(cx.listener(|t, _: &actions::Delete, _, cx| {
+                if !t.vector_delete(cx) {
+                    cx.propagate();
+                }
+            }))
+            .on_action(cx.listener(|t, _: &actions::SelectAll, _, cx| {
+                if !t.vector_select_all(cx) {
+                    cx.propagate();
+                }
+            }))
+            .on_action(cx.listener(|t, _: &actions::Undo, _, cx| {
+                // Undo with only the first point placed drops it (Pen).
+                if t.vector.as_ref().is_some_and(|v| v.node.is_none()) {
+                    t.vector = None;
+                    cx.notify();
+                } else {
+                    cx.propagate();
+                }
+            }))
+            .on_action(cx.listener(|t, _: &actions::NudgeLeft, _, cx| t.nudge_points(-1., 0., cx)))
+            .on_action(cx.listener(|t, _: &actions::NudgeRight, _, cx| t.nudge_points(1., 0., cx)))
+            .on_action(cx.listener(|t, _: &actions::NudgeUp, _, cx| t.nudge_points(0., -1., cx)))
+            .on_action(cx.listener(|t, _: &actions::NudgeDown, _, cx| t.nudge_points(0., 1., cx)))
+            .on_action(
+                cx.listener(|t, _: &actions::NudgeLeftBig, _, cx| t.nudge_points(-10., 0., cx)),
+            )
+            .on_action(
+                cx.listener(|t, _: &actions::NudgeRightBig, _, cx| t.nudge_points(10., 0., cx)),
+            )
+            .on_action(
+                cx.listener(|t, _: &actions::NudgeUpBig, _, cx| t.nudge_points(0., -10., cx)),
+            )
+            .on_action(
+                cx.listener(|t, _: &actions::NudgeDownBig, _, cx| t.nudge_points(0., 10., cx)),
+            )
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                 if !*hovered && this.hover.is_some() {
                     this.hover = None;
@@ -1531,6 +1638,24 @@ impl Render for CanvasHost {
                             |_, _, _| (),
                             move |_, (), window, cx| {
                                 entity.update(cx, |h, cx| h.paint_overlay(window, cx));
+                                // A release that arrives before the next frame
+                                // (so before `drag::capture` exists) still ends
+                                // the gesture: down + up in one frame used to
+                                // leave a marquee stuck.
+                                let e = entity.clone();
+                                window.on_mouse_event(
+                                    move |ev: &MouseUpEvent, phase, window, cx| {
+                                        if phase == DispatchPhase::Bubble
+                                            && ev.button == MouseButton::Left
+                                        {
+                                            e.update(cx, |h, cx| {
+                                                if h.gesture_active() {
+                                                    h.on_up(window, cx);
+                                                }
+                                            });
+                                        }
+                                    },
+                                );
                             },
                         )
                         .size_full(),
@@ -1548,6 +1673,14 @@ impl Render for CanvasHost {
                         .text_color(p.fg_muted)
                         .child("Loading…"),
                 )
+            })
+            .when(self.grad.is_some(), |d| {
+                d.child(drag::capture(
+                    cx.entity(),
+                    CursorStyle::ClosedHand,
+                    Self::on_grad_move,
+                    Self::on_grad_up,
+                ))
             })
             .when(dragging, |d| {
                 d.child(drag::capture(

@@ -5,6 +5,7 @@
 //! document implements `PropertySource` (snapshot = resolved properties,
 //! `apply` = a `DocOp` in an undo block) and the panel stays as is.
 
+use super::fill::{FillType, GradientInfo, ImageInfo, PaintOp};
 use super::value::SizeValue;
 use crate::layers::model::{LayerId, LayerKind};
 
@@ -110,7 +111,12 @@ pub enum PaintKind {
     Solid(u32),
     LinearGradient,
     RadialGradient,
+    AngularGradient,
     Image,
+    MeshGradient,
+    Shader,
+    /// A fill object this version does not know (kept verbatim).
+    Unknown,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -118,6 +124,11 @@ pub struct Paint {
     pub kind: PaintKind,
     pub opacity: f32,
     pub visible: bool,
+    /// Color variable a solid paint is bound to (without `$`).
+    pub var: Option<String>,
+    /// Stops and geometry of a linear / radial / angular gradient.
+    pub gradient: Option<GradientInfo>,
+    pub image: Option<ImageInfo>,
 }
 
 impl Paint {
@@ -126,6 +137,9 @@ impl Paint {
             kind: PaintKind::Solid(rgba),
             opacity: 1.0,
             visible: true,
+            var: None,
+            gradient: None,
+            image: None,
         }
     }
 
@@ -135,8 +149,24 @@ impl Paint {
             PaintKind::Solid(c) => format!("{:06X}", c >> 8),
             PaintKind::LinearGradient => "Linear".into(),
             PaintKind::RadialGradient => "Radial".into(),
+            PaintKind::AngularGradient => "Angular".into(),
             PaintKind::Image => "Image".into(),
+            PaintKind::MeshGradient => "Mesh".into(),
+            PaintKind::Shader => "Shader".into(),
+            PaintKind::Unknown => "Unknown".into(),
         }
+    }
+
+    /// The popover's type for this paint (`None` = not editable there).
+    pub fn fill_type(&self) -> Option<FillType> {
+        Some(match self.kind {
+            PaintKind::Solid(_) => FillType::Solid,
+            PaintKind::LinearGradient => FillType::Linear,
+            PaintKind::RadialGradient => FillType::Radial,
+            PaintKind::AngularGradient => FillType::Angular,
+            PaintKind::Image => FillType::Image,
+            _ => return None,
+        })
     }
 }
 
@@ -549,6 +579,29 @@ impl NodeProps {
                     t.align = *a;
                 }
             }
+            PropEdit::Paint { stroke, index, op } => {
+                let list = if *stroke {
+                    &mut self.strokes
+                } else {
+                    &mut self.fills
+                };
+                // Placeholder model: only the type and opacity are tracked.
+                if let Some(p) = list.get_mut(*index) {
+                    match op {
+                        PaintOp::SetType(t) => {
+                            p.kind = match t {
+                                FillType::Solid => PaintKind::Solid(0xd9d9d9ff),
+                                FillType::Linear => PaintKind::LinearGradient,
+                                FillType::Radial => PaintKind::RadialGradient,
+                                FillType::Angular => PaintKind::AngularGradient,
+                                FillType::Image => PaintKind::Image,
+                            }
+                        }
+                        PaintOp::Opacity(o) => p.opacity = o.clamp(0.0, 1.0),
+                        _ => {}
+                    }
+                }
+            }
         }
     }
 }
@@ -624,6 +677,12 @@ pub enum PropEdit {
     MoveStroke(usize, usize),
     SetStrokeOpacity(usize, f32),
     SetEffect(usize, EffectParams),
+    /// Gradient / image / type edits of fill (or stroke) `index`.
+    Paint {
+        stroke: bool,
+        index: usize,
+        op: PaintOp,
+    },
 }
 
 /// What the inspector needs from a document.

@@ -45,6 +45,8 @@ impl DocState {
         let (mut scene, _) = SceneDoc::load(&bytes, dir.as_deref(), &FsLibraries::default())
             .with_context(|| format!("loading {}", path.display()))?;
         let mut pipe = Pipeline::new(TextEngine::new(), Box::new(FsAssets::new(dir)));
+        pipe.set_script_runner(Box::new(pen_script::ScriptNodeRunner::new()));
+        pipe.set_shader_renderer(std::sync::Arc::new(pen_shader::ShaderEngine::new()));
         pipe.rebuild(&mut scene);
         let engine = ScriptEngine::with_limits(Limits {
             stack_bytes: SCRIPT_STACK,

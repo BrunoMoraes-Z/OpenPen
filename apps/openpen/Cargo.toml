@@ -17,6 +17,7 @@ glam.workspace = true
 cosmic-text.workspace = true
 pen-mcp.workspace = true
 pen-script.workspace = true
+pen-shader.workspace = true
 futures = "0.3"
 
 [dev-dependencies]

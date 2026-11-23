@@ -183,7 +183,10 @@ impl LayoutEngine {
                 y = rn.y;
             }
             let node = scene.get(key);
-            let text_layout = node.and_then(|n| final_text(n, w, text));
+            let text_layout = node.and_then(|n| match scene.script_error(key) {
+                Some(msg) if n.kind == Kind::Script => script_error_text(msg, w, text),
+                _ => final_text(n, w, text),
+            });
             self.results[key.0 as usize] = Some(NodeLayout {
                 x: sanitize(x),
                 y: sanitize(y),
@@ -191,6 +194,22 @@ impl LayoutEngine {
                 h,
                 text: text_layout,
             });
+        }
+        // Generated output of script nodes: each top-level generated node is laid out
+        // on its own, positioned at its x/y inside the script box (like a frame with
+        // `layout: none`). Scripts never contain scripts, so this does not recurse.
+        if scene.has_generated() {
+            let scripts: Vec<NodeKey> = self
+                .ids
+                .iter()
+                .map(|(k, _)| *k)
+                .filter(|k| !scene.generated(*k).is_empty())
+                .collect();
+            for s in scripts {
+                for &g in scene.generated(s) {
+                    self.layout_root_in(tree, scene, g, text);
+                }
+            }
         }
     }
 
@@ -402,6 +421,23 @@ fn final_text(n: &SceneNode, w: f32, text: &mut TextEngine) -> Option<Arc<TextLa
         }
         _ => None,
     }
+}
+
+/// Padding of the error message drawn inside a failed script node.
+pub const SCRIPT_ERROR_PADDING: f32 = 8.0;
+
+/// Text style of the error message of a failed script node.
+pub fn script_error_spec(content: Arc<str>) -> pen_doc::TextSpec {
+    pen_doc::TextSpec {
+        size: 11.0,
+        line_height: 1.35,
+        ..note_text_spec(content)
+    }
+}
+
+fn script_error_text(msg: &str, w: f32, text: &mut TextEngine) -> Option<Arc<TextLayout>> {
+    let spec = script_error_spec(msg.into());
+    Some(text.layout(&spec, Some((w - 2.0 * SCRIPT_ERROR_PADDING).max(1.0))))
 }
 
 /// Text style used to draw note contents.

@@ -16,7 +16,10 @@ pub mod icons;
 pub mod layout;
 pub mod path;
 pub mod pipeline;
+pub mod script;
+pub mod shader;
 pub mod text;
+pub mod vector;
 
 pub use assets::{AssetResolver, BundledIcons, FsAssets, IconGlyph, ImageLookup, NoAssets};
 pub use icons::{IconError, IconRef, bundled_icon, resolve_icon};
@@ -51,4 +54,6 @@ pub const DEFAULT_SANS_FAMILY: &str = pen_fonts::DEFAULT_SANS;
 pub use display::{DisplayListBuilder, local_transform, node_world_rect, parent_world};
 pub use layout::{LayoutEngine, NodeLayout};
 pub use pipeline::{Pipeline, UpdateStats};
+pub use script::{ScriptError, ScriptExpander, ScriptRequest, ScriptRunner, ScriptStats};
+pub use shader::{ShaderLookup, ShaderNeeds, ShaderRenderer, ShaderRequest};
 pub use text::{TextEngine, TextLayout, text_block};

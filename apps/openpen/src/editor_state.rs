@@ -9,6 +9,7 @@ use gpui_kit::*;
 
 use crate::agent::fx::AgentFx;
 use crate::agent::{AgentInfo, AppScriptHost, touched_nodes};
+use crate::inspector::fill::{FillEditTarget, PaintOp};
 use crate::inspector::model::{PropEdit, PropertySource};
 use crate::layers::model::{FlatRow, LayerId, LayerTreeSource, containers_below, flatten, reveal};
 use crate::scene_document::{Arrange, SceneDocument, id_of, key_of};
@@ -53,6 +54,13 @@ pub struct EditorState {
     exp_snap: Vec<(LayerId, String)>,
     /// Flashes and cursors of agents editing this document.
     pub agent_fx: AgentFx,
+    /// Paint open in the inspector's fill popover (gradient handles on the
+    /// canvas; Delete removes its selected stop).
+    pub fill_edit: Option<FillEditTarget>,
+    /// The canvas is dragging one of its gradient handles.
+    pub fill_handle_drag: bool,
+    /// A task polls background image decodes (see [`Self::watch_assets`]).
+    assets_watch: bool,
 }
 
 /// Where a context menu was requested.
@@ -95,6 +103,9 @@ impl EditorState {
             sel_snap: (Vec::new(), Vec::new()),
             exp_snap: Vec::new(),
             agent_fx: AgentFx::new(),
+            fill_edit: None,
+            fill_handle_drag: false,
+            assets_watch: false,
         };
         s.reset_tree();
         s
@@ -344,6 +355,48 @@ impl EditorState {
         self.changed(cx);
     }
 
+    pub fn set_fill_edit(&mut self, t: Option<FillEditTarget>, cx: &mut Context<Self>) {
+        if self.fill_edit != t {
+            self.fill_edit = t;
+            cx.notify();
+        }
+    }
+
+    /// Polls background image decodes (a new or replaced image fill) until
+    /// they finish, swapping the decoded images in.
+    pub fn watch_assets(&mut self, cx: &mut Context<Self>) {
+        if self.assets_watch {
+            return;
+        }
+        self.assets_watch = true;
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(30))
+                    .await;
+                let pending = this.update(cx, |s, cx| {
+                    if s.doc.poll_assets() {
+                        cx.notify();
+                    }
+                    s.doc.has_pending_assets()
+                });
+                if !matches!(pending, Ok(true)) {
+                    break;
+                }
+            }
+            let _ = this.update(cx, |s, _| s.assets_watch = false);
+        })
+        .detach();
+    }
+
+    /// Picks up image files changed on disk (window activation).
+    pub fn reload_changed_assets(&mut self, cx: &mut Context<Self>) {
+        if self.doc.reload_changed_assets() {
+            cx.notify();
+            self.watch_assets(cx);
+        }
+    }
+
     /// Opens an undo block spanning several `changed` calls (a drag).
     pub fn begin_gesture(&mut self) {
         self.doc.begin();
@@ -390,6 +443,21 @@ impl EditorState {
     }
 
     pub fn delete_selection(&mut self, cx: &mut Context<Self>) {
+        // A selected gradient stop goes first (Pen).
+        if let Some(t) = self.fill_edit
+            && let Some(i) = t.stop
+        {
+            self.fill_edit = Some(FillEditTarget { stop: None, ..t });
+            self.apply(
+                PropEdit::Paint {
+                    stroke: t.stroke,
+                    index: t.index,
+                    op: PaintOp::RemoveStop(i),
+                },
+                cx,
+            );
+            return;
+        }
         let keys = self.keys();
         if self.doc.delete(&keys) > 0 {
             self.selection.clear();

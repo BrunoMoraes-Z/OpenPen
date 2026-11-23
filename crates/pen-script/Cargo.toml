@@ -28,3 +28,7 @@ doctest = false
 [[bench]]
 name = "execute"
 harness = false
+
+[[bench]]
+name = "node_script"
+harness = false

@@ -12,13 +12,13 @@ pub struct ParsedPath {
     pub bounds: [f32; 4],
 }
 
-struct Lexer<'a> {
-    b: &'a [u8],
-    i: usize,
+pub(crate) struct Lexer<'a> {
+    pub(crate) b: &'a [u8],
+    pub(crate) i: usize,
 }
 
 impl Lexer<'_> {
-    fn skip_sep(&mut self) {
+    pub(crate) fn skip_sep(&mut self) {
         while self.i < self.b.len()
             && (self.b[self.i].is_ascii_whitespace() || self.b[self.i] == b',')
         {
@@ -30,7 +30,7 @@ impl Lexer<'_> {
         let c = *self.b.get(self.i)?;
         c.is_ascii_alphabetic().then_some(c)
     }
-    fn number(&mut self) -> Option<f32> {
+    pub(crate) fn number(&mut self) -> Option<f32> {
         self.skip_sep();
         let start = self.i;
         let b = self.b;
@@ -88,6 +88,14 @@ impl Lexer<'_> {
 /// Parses SVG path data (`M L H V C S Q T A Z`, absolute and relative). Parsing
 /// stops at the first malformed segment, keeping what was parsed.
 pub fn parse_svg_path(d: &str) -> ParsedPath {
+    let (els, _) = parse_els(d);
+    let bounds = path_bounds(&els);
+    ParsedPath { els, bounds }
+}
+
+/// Absolute path elements of `d`, and whether the whole input was consumed
+/// (`false`: parsing stopped at a malformed segment).
+pub(crate) fn parse_els(d: &str) -> (Vec<PathEl>, bool) {
     let mut lx = Lexer {
         b: d.as_bytes(),
         i: 0,
@@ -203,8 +211,9 @@ pub fn parse_svg_path(d: &str) -> ParsedPath {
         last_ctrl = ctrl;
         last_quad = quad;
     }
-    let bounds = path_bounds(&els);
-    ParsedPath { els, bounds }
+    lx.skip_sep();
+    let complete = lx.i >= lx.b.len();
+    (els, complete)
 }
 
 /// SVG endpoint arc -> cubic Béziers (F.6.5 of the SVG spec).

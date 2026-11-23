@@ -4,9 +4,10 @@
 use pen_render::{ImageData, Path};
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
+use std::path::{Path as FsPath, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
+use std::time::SystemTime;
 
 /// Result of [`AssetResolver::image_lookup`].
 #[derive(Debug, Clone)]
@@ -45,6 +46,12 @@ pub trait AssetResolver: Send + Sync {
     /// True if some `Pending` image finished loading since the last call.
     fn take_ready(&self) -> bool {
         false
+    }
+    /// Re-checks the files behind the images handed out so far and returns the
+    /// urls whose file changed on disk (size or modification time). Those are
+    /// forgotten, so the next lookup reloads them. Default: nothing changes.
+    fn changed_images(&self) -> Vec<String> {
+        Vec::new()
     }
     /// Glyph of icon `name` from icon font `library` (`lucide`, `Material
     /// Symbols Rounded`, ...). `None` draws a placeholder. The default uses the
@@ -88,6 +95,29 @@ impl AssetResolver for BundledIcons {
 pub struct FsAssets {
     pub base_dir: Option<PathBuf>,
     deferred: Option<Arc<Deferred>>,
+    /// File and stamp of every image handed out (see [`AssetResolver::changed_images`]).
+    seen: Arc<Mutex<SeenImages>>,
+}
+
+/// File and stamp of each image url handed out.
+type SeenImages = HashMap<String, (PathBuf, Option<FileStamp>)>;
+
+/// Identity of an image file's content: a different size or modification
+/// time means the file changed (and gets a new [`ImageData::id`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FileStamp {
+    pub len: u64,
+    pub modified: Option<SystemTime>,
+}
+
+impl FileStamp {
+    pub fn of(path: &FsPath) -> Option<FileStamp> {
+        let m = std::fs::metadata(path).ok()?;
+        Some(FileStamp {
+            len: m.len(),
+            modified: m.modified().ok(),
+        })
+    }
 }
 
 #[derive(Debug, Default)]
@@ -108,7 +138,7 @@ impl FsAssets {
     pub fn new(base_dir: Option<PathBuf>) -> Self {
         Self {
             base_dir,
-            deferred: None,
+            ..Default::default()
         }
     }
 
@@ -117,6 +147,14 @@ impl FsAssets {
         Self {
             base_dir,
             deferred: Some(Arc::new(Deferred::default())),
+            ..Default::default()
+        }
+    }
+
+    fn remember(&self, url: &str, path: &FsPath) {
+        let mut seen = self.seen.lock().unwrap_or_else(|p| p.into_inner());
+        if !seen.contains_key(url) {
+            seen.insert(url.to_owned(), (path.to_path_buf(), FileStamp::of(path)));
         }
     }
 
@@ -125,7 +163,7 @@ impl FsAssets {
             return None;
         }
         let rel = pen_doc::library::percent_decode(url.strip_prefix("file://").unwrap_or(url));
-        let p = std::path::Path::new(&rel);
+        let p = FsPath::new(&rel);
         Some(match &self.base_dir {
             Some(b) if p.is_relative() => b.join(p),
             _ => p.to_path_buf(),
@@ -133,9 +171,10 @@ impl FsAssets {
     }
 }
 
-fn load_image(path: &std::path::Path, url: &str) -> Option<Arc<ImageData>> {
+fn load_image(path: &FsPath) -> Option<Arc<ImageData>> {
+    let stamp = FileStamp::of(path);
     let bytes = std::fs::read(path).ok()?;
-    decode_image(&bytes, image_id(url)).map(Arc::new)
+    decode_image(&bytes, file_image_id(path, stamp)).map(Arc::new)
 }
 
 impl Deferred {
@@ -153,7 +192,7 @@ impl Deferred {
                     .spawn(move || {
                         // Ends when the resolver (and with it the sender) is dropped.
                         while let Ok((url, path)) = rx.recv() {
-                            let img = load_image(&path, &url);
+                            let img = load_image(&path);
                             let Some(d) = weak.upgrade() else { break };
                             let mut st = d.state.lock().unwrap_or_else(|p| p.into_inner());
                             st.queued.remove(&url);
@@ -172,7 +211,7 @@ impl Deferred {
             if !sent {
                 // No worker thread: decode inline.
                 st.queued.remove(url);
-                let img = load_image(&path, url);
+                let img = load_image(&path);
                 st.done.insert(url.to_owned(), img.clone());
                 return img.map_or(ImageLookup::Missing, ImageLookup::Ready);
             }
@@ -183,16 +222,19 @@ impl Deferred {
 
 impl AssetResolver for FsAssets {
     fn image(&self, url: &str) -> Option<Arc<ImageData>> {
-        load_image(&self.path_of(url)?, url)
+        let path = self.path_of(url)?;
+        self.remember(url, &path);
+        load_image(&path)
     }
 
     fn image_lookup(&self, url: &str) -> ImageLookup {
         let Some(path) = self.path_of(url) else {
             return ImageLookup::Missing;
         };
+        self.remember(url, &path);
         match &self.deferred {
             Some(d) => d.lookup(url, path),
-            None => load_image(&path, url).map_or(ImageLookup::Missing, ImageLookup::Ready),
+            None => load_image(&path).map_or(ImageLookup::Missing, ImageLookup::Ready),
         }
     }
 
@@ -201,12 +243,45 @@ impl AssetResolver for FsAssets {
             .as_ref()
             .is_some_and(|d| d.ready.swap(false, Ordering::AcqRel))
     }
+
+    fn changed_images(&self) -> Vec<String> {
+        let mut seen = self.seen.lock().unwrap_or_else(|p| p.into_inner());
+        let changed: Vec<String> = seen
+            .iter()
+            .filter(|(_, (path, stamp))| FileStamp::of(path) != *stamp)
+            .map(|(url, _)| url.clone())
+            .collect();
+        if changed.is_empty() {
+            return changed;
+        }
+        let mut done = self
+            .deferred
+            .as_ref()
+            .map(|d| d.state.lock().unwrap_or_else(|p| p.into_inner()));
+        for url in &changed {
+            seen.remove(url);
+            if let Some(st) = done.as_mut() {
+                st.done.remove(url);
+            }
+        }
+        changed
+    }
 }
 
 /// Stable id of an image url.
 pub fn image_id(url: &str) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     url.hash(&mut h);
+    h.finish()
+}
+
+/// Id of the decoded content of an image file: its path plus its
+/// [`FileStamp`], so a file rewritten on disk gets a new id (and new GPU /
+/// raster textures, which are keyed by [`ImageData::id`]).
+pub fn file_image_id(path: &FsPath, stamp: Option<FileStamp>) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    path.hash(&mut h);
+    stamp.hash(&mut h);
     h.finish()
 }
 

@@ -31,7 +31,9 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::assets::{AssetResolver, IconGlyph, ImageLookup, NoAssets};
-use crate::layout::{LayoutEngine, NOTE_PADDING, NodeLayout, note_text_spec};
+use crate::layout::{
+    LayoutEngine, NOTE_PADDING, NodeLayout, SCRIPT_ERROR_PADDING, note_text_spec, script_error_spec,
+};
 use crate::path::{ParsedPath, ellipse_path, fit_path, parse_svg_path, polygon_path};
 use crate::text::text_block;
 
@@ -46,9 +48,22 @@ pub struct DisplayListBuilder {
     cur_root: NodeKey,
     /// Roots whose chunk drew a placeholder for a still-loading image.
     pending_roots: HashSet<NodeKey>,
+    /// Roots whose chunk uses each image url (see [`Self::reload_changed_assets`]).
+    image_roots: HashMap<Arc<str>, HashSet<NodeKey>>,
     icons: HashMap<(Arc<str>, Arc<str>, u32), Option<IconGlyph>>,
     paths: HashMap<u64, Arc<ParsedPath>>,
+    /// Shader engine (see [`crate::shader`]).
+    shaders: Option<Arc<dyn crate::shader::ShaderRenderer>>,
+    /// Fills being drawn (for shader fills).
+    fill_ctx: Option<shader_fx::FillCtx>,
+    /// Index in `cx.items` where the node being emitted starts.
+    node_start: usize,
+    /// Directory of the document being built (shader urls).
+    base_dir: Option<std::path::PathBuf>,
 }
+
+mod shader_fx;
+pub use shader_fx::SHADER_ERROR;
 
 impl Default for DisplayListBuilder {
     fn default() -> Self {
@@ -153,8 +168,13 @@ impl DisplayListBuilder {
             images: HashMap::new(),
             cur_root: NodeKey(u32::MAX),
             pending_roots: HashSet::new(),
+            image_roots: HashMap::new(),
             icons: HashMap::new(),
             paths: HashMap::new(),
+            shaders: None,
+            fill_ctx: None,
+            node_start: 0,
+            base_dir: None,
         }
     }
 
@@ -172,7 +192,9 @@ impl DisplayListBuilder {
         layout: &LayoutEngine,
         list: &mut DisplayList,
     ) -> Vec<NodeKey> {
-        if self.pending_roots.is_empty() || !self.assets.take_ready() {
+        let images = self.assets.take_ready();
+        let shaders = self.shaders.as_ref().is_some_and(|s| s.take_ready());
+        if self.pending_roots.is_empty() || !(images || shaders) {
             return Vec::new();
         }
         let roots: Vec<NodeKey> = self.pending_roots.drain().collect();
@@ -189,9 +211,40 @@ impl DisplayListBuilder {
         rebuilt
     }
 
+    /// Rebuilds, in place, the chunks that use images whose file changed on
+    /// disk since it was loaded (see [`AssetResolver::changed_images`]).
+    /// Returns the rebuilt roots (empty = nothing changed).
+    pub fn reload_changed_assets(
+        &mut self,
+        scene: &SceneDoc,
+        layout: &LayoutEngine,
+        list: &mut DisplayList,
+    ) -> Vec<NodeKey> {
+        let changed = self.assets.changed_images();
+        let mut roots: HashSet<NodeKey> = HashSet::new();
+        for url in &changed {
+            self.images.remove(url.as_str());
+            if let Some(r) = self.image_roots.remove(url.as_str()) {
+                roots.extend(r);
+            }
+        }
+        let mut rebuilt = Vec::new();
+        for r in roots {
+            let Some(i) = list.chunks.iter().position(|c| c.root == r) else {
+                continue;
+            };
+            if let Some(c) = self.build_chunk(scene, layout, r) {
+                list.chunks[i] = Arc::new(c);
+                rebuilt.push(r);
+            }
+        }
+        rebuilt
+    }
+
     /// Drops cached images/icons (e.g. after files changed on disk).
     pub fn clear_asset_cache(&mut self) {
         self.images.clear();
+        self.image_roots.clear();
         self.icons.clear();
     }
 
@@ -289,6 +342,7 @@ impl DisplayListBuilder {
         };
         let parent = parent_world(scene, layout, root);
         self.cur_root = root;
+        self.base_dir = scene.base_dir().map(std::path::Path::to_path_buf);
         self.pending_roots.remove(&root);
         self.emit(&mut cx, root, parent);
         let bounds = cx.bounds.pop().flatten()?;
@@ -312,8 +366,13 @@ impl DisplayListBuilder {
         }
         let world = parent * local_transform(n, l);
         let size = Vec2::new(l.w, l.h);
-        let kids: SmallVec<[NodeKey; 8]> = n
-            .children
+        // A script node draws its generated output as children.
+        let child_keys: &[NodeKey] = if n.kind == Kind::Script {
+            cx.scene.generated(key)
+        } else {
+            &n.children
+        };
+        let kids: SmallVec<[NodeKey; 8]> = child_keys
             .iter()
             .copied()
             .filter(|c| {
@@ -337,6 +396,14 @@ impl DisplayListBuilder {
         let layer = (n.opacity < 1.0 && !fold) || blur > 0.0;
         let alpha = if fold { n.opacity } else { 1.0 };
         let shape = self.shape_of(n, size);
+        let node_start = cx.items.len();
+        self.node_start = node_start;
+        self.fill_ctx = None;
+        let fx_shaders =
+            self.shaders.is_some() && n.effects.as_ref().is_some_and(|e| !e.shaders.is_empty());
+        if fx_shaders {
+            cx.bounds.push(None);
+        }
 
         if backdrop > 0.0
             && let Some(s) = &shape
@@ -439,6 +506,9 @@ impl DisplayListBuilder {
                     cx.items.truncate(i);
                 }
             }
+        }
+        if fx_shaders && let Some(fx) = &n.effects {
+            self.apply_shader_effects(cx, &fx.shaders, world, size, node_start);
         }
     }
 
@@ -602,6 +672,11 @@ impl DisplayListBuilder {
                     });
                 }
             }
+            Kind::Script if cx.scene.script_error(key).is_some() => {
+                self.emit_script_error(cx, n, key, l, world, size, alpha);
+            }
+            // Expanded (possibly to nothing): only the output is drawn.
+            Kind::Script if cx.scene.generated_tag(key).is_some() => {}
             Kind::Script | Kind::BrokenRef => {
                 let (fill, line) = if n.kind == Kind::Script {
                     (
@@ -682,6 +757,7 @@ impl DisplayListBuilder {
                 }
                 let b = shape_bounds(size, stroke_spec, &shadows).transformed(&world);
                 let stroke = stroke_spec.map(|s| self.stroke(s, size, alpha));
+                self.begin_fills(cx, fills, shape, world);
                 // Group fills by blend mode runs.
                 let mut start = 0;
                 let mut first = true;
@@ -742,6 +818,60 @@ impl DisplayListBuilder {
                 }
                 cx.add_bounds(b);
             }
+        }
+    }
+
+    /// Failed script: red dashed box with the error message.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_script_error(
+        &mut self,
+        cx: &mut Cx<'_>,
+        n: &SceneNode,
+        key: NodeKey,
+        l: &NodeLayout,
+        world: Affine2,
+        size: Vec2,
+        alpha: f32,
+    ) {
+        let msg = cx.scene.script_error(key).unwrap_or_default();
+        cx.items.push(DisplayItem::Shape {
+            node: key,
+            transform: world,
+            shape: Shape::Rect {
+                size,
+                radii: CornerRadii(n.corner_radius),
+            },
+            fills: smallvec![Paint::Solid(Color::rgba(0.95, 0.25, 0.2, 0.1 * alpha))],
+            stroke: Some(Stroke {
+                paints: smallvec![Paint::Solid(Color::rgba(0.85, 0.2, 0.15, 0.9 * alpha))],
+                widths: [1.0; 4],
+                align: StrokeAlign::Inside,
+                cap: LineCap::Butt,
+                join: LineJoin::Miter,
+                miter_limit: 4.0,
+                dash: smallvec![4.0, 4.0],
+            }),
+            shadows: SmallVec::new(),
+        });
+        cx.add_bounds(Rect::new(0.0, 0.0, size.x, size.y).transformed(&world));
+        if let Some(tl) = &l.text {
+            let spec = script_error_spec(msg.into());
+            let mut block = text_block(
+                &spec,
+                tl,
+                Paint::Solid(Color::rgba(0.7, 0.12, 0.08, alpha)),
+                Vec2::new(
+                    (size.x - 2.0 * SCRIPT_ERROR_PADDING).max(0.0),
+                    (size.y - 2.0 * SCRIPT_ERROR_PADDING).max(0.0),
+                ),
+                true,
+            );
+            block.clip = true;
+            cx.items.push(DisplayItem::Text {
+                node: key,
+                transform: world * Affine2::from_translation(Vec2::splat(SCRIPT_ERROR_PADDING)),
+                block: Arc::new(block),
+            });
         }
     }
 
@@ -955,12 +1085,21 @@ impl DisplayListBuilder {
                             stops,
                         }
                     }
-                    GradientKind::Radial => Paint::Radial {
-                        center: c,
-                        radius: Vec2::new(g.size[0] * size.x * 0.5, g.size[1] * size.y * 0.5)
-                            .max(Vec2::splat(1e-3)),
-                        stops,
-                    },
+                    GradientKind::Radial => {
+                        // `size[1]` lies along the rotation (0 = up) and
+                        // `size[0]` across it. The paint has no rotation:
+                        // turned mostly sideways, the two radii swap.
+                        let [mut rx, mut ry] = g.size;
+                        if rot.sin().abs() > rot.cos().abs() {
+                            std::mem::swap(&mut rx, &mut ry);
+                        }
+                        Paint::Radial {
+                            center: c,
+                            radius: Vec2::new(rx * size.x * 0.5, ry * size.y * 0.5)
+                                .max(Vec2::splat(1e-3)),
+                            stops,
+                        }
+                    }
                     GradientKind::Angular => Paint::Angular {
                         center: c,
                         start_angle: -std::f32::consts::FRAC_PI_2 - rot,
@@ -968,7 +1107,15 @@ impl DisplayListBuilder {
                     },
                 }
             }
+            // Shader fills are drawn by `emit_shader_fills` (transparent here).
+            PaintSpec::Shader(sh) => self.shader_paint(p, sh, size, alpha),
             PaintSpec::Image(i) => {
+                if let Some(r) = self.image_roots.get_mut(&i.url) {
+                    r.insert(self.cur_root);
+                } else {
+                    self.image_roots
+                        .insert(i.url.clone(), HashSet::from([self.cur_root]));
+                }
                 let img = match self.images.get(&i.url) {
                     Some(img) => img.clone(),
                     None => match self.assets.image_lookup(&i.url) {

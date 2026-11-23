@@ -1,0 +1,33 @@
+[package]
+name = "pen-shader"
+description = "Shaders GLSL (WebGL 1.0) dos fills/effects .pen: anotações, front-end naga e avaliador em CPU"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pen-doc.workspace = true
+pen-layout.workspace = true
+pen-render.workspace = true
+pen-raster.workspace = true
+image.workspace = true
+smallvec.workspace = true
+naga = { version = "30", default-features = false, features = ["glsl-in"] }
+# Headless GPU backend (falls back to the CPU evaluator without an adapter).
+wgpu = { version = "30", default-features = false, features = ["std", "dx12", "vulkan", "metal", "naga-ir"] }
+pollster = "0.4"
+half = "2"
+
+[dev-dependencies]
+pen-script.workspace = true
+pen-schema.workspace = true
+serde_json.workspace = true
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+
+[lib]
+# rustdoc is not available in this toolchain
+doctest = false
+
+[[bench]]
+name = "shader"
+harness = false

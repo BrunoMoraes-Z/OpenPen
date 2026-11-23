@@ -149,11 +149,34 @@ pub struct ImageSpec {
     pub opacity: f32,
 }
 
+/// Resolved script input / shader uniform value (`$variables` already substituted; colors
+/// stay `#hex` strings).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParamValue {
+    Num(f64),
+    Bool(bool),
+    Str(Arc<str>),
+    /// vec2..vec4
+    Vec(SmallVec<[f64; 4]>),
+}
+
+/// A `shader` fill or effect: GLSL file plus uniform values.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShaderSpec {
+    /// As written in the file (relative to the document).
+    pub url: Arc<str>,
+    pub uniforms: Arc<[(Arc<str>, ParamValue)]>,
+    /// Fill opacity (1 for effects).
+    pub opacity: f32,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum PaintSpec {
     Solid(Color),
     Gradient(Box<GradientSpec>),
     Image(Box<ImageSpec>),
+    /// GLSL fragment shader evaluated over the node box (see `docs/scripts-shaders.md`).
+    Shader(Box<ShaderSpec>),
 }
 
 /// One enabled fill/stroke paint.
@@ -196,6 +219,8 @@ pub struct EffectSpec {
     pub blur: f32,
     /// Background blur radius.
     pub backdrop_blur: f32,
+    /// Enabled `shader` effects, chained in list order over the rendered node.
+    pub shaders: Vec<ShaderSpec>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -271,6 +296,8 @@ pub enum KindData {
     },
     Script {
         uri: Arc<str>,
+        /// `inputs` in file order, variables resolved.
+        inputs: Arc<[(Arc<str>, ParamValue)]>,
     },
     Browser {
         url: Arc<str>,
@@ -316,6 +343,9 @@ pub enum Origin {
     /// `instance`; `path` is the slash id path relative to that instance
     /// (the `descendants` key that overrides it).
     Instance { instance: NodeKey, path: Arc<str> },
+    /// Output of the `script` node `script`: rendered and laid out, never saved nor
+    /// addressable (see `SceneDoc::set_generated`).
+    Generated { script: NodeKey },
 }
 
 /// One node of the resolved scene.

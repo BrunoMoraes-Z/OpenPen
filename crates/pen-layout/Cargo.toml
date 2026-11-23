@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 pen-doc.workspace = true
+pen-schema.workspace = true
 pen-render.workspace = true
 pen-fonts.workspace = true
 taffy.workspace = true

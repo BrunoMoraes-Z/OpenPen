@@ -86,6 +86,8 @@ pub(crate) struct Builder<'a> {
     pub root: Option<NodeKey>,
     pub stack: Vec<(u16, &'a str)>,
     pub warnings: &'a mut Vec<String>,
+    /// Building the output of this script node: plain nodes get [`Origin::Generated`].
+    pub generated: Option<NodeKey>,
 }
 
 impl<'a> Builder<'a> {
@@ -138,11 +140,20 @@ impl<'a> Builder<'a> {
         key
     }
 
+    /// Origin of a node outside any instance.
+    fn plain_origin(&self) -> Origin {
+        match self.generated {
+            Some(script) => Origin::Generated { script },
+            None => Origin::Doc,
+        }
+    }
+
     fn reuse_path(&self, id: &str, origin: &Origin) -> Option<String> {
-        if self.reuse.is_empty() {
+        if self.reuse.is_empty() || self.generated.is_some() {
             return None;
         }
         Some(match origin {
+            Origin::Generated { .. } => return None,
             Origin::Doc => id.to_string(),
             Origin::Instance { instance, path } => {
                 format!("{}/{path}", self.arena.get(*instance).map_or("", |n| &n.id))
@@ -168,6 +179,34 @@ impl<'a> Builder<'a> {
             node.id_str(),
             Origin::Doc,
             parent,
+            theme,
+            &[],
+            None,
+            None,
+        )
+    }
+
+    /// Builds one node of a script's output (authored in namespace `ns`) under `parent`
+    /// with [`Self::generated`] set.
+    pub fn build_generated(
+        &mut self,
+        node: &'a Node,
+        ns: u16,
+        parent: NodeKey,
+        theme: ThemeId,
+    ) -> Option<NodeKey> {
+        let layers: Layers<'a> = SmallVec::from_slice(&[Layer {
+            ns,
+            node,
+            mask: ALL,
+            doc_tree: false,
+        }]);
+        let origin = self.plain_origin();
+        self.build_layers(
+            layers,
+            node.id_str(),
+            origin,
+            Some(parent),
             theme,
             &[],
             None,
@@ -227,7 +266,7 @@ impl<'a> Builder<'a> {
                 instance: inst,
                 path: format!("{}{}", scopes[0].prefix, self.qualify(id, ns, 0)).into(),
             },
-            None => Origin::Doc,
+            None => self.plain_origin(),
         };
         self.build_layers(
             layers,
@@ -673,8 +712,11 @@ impl<'a> Builder<'a> {
                 for eff in e.iter() {
                     self.effect(ns, eff, theme, &mut fx);
                 }
-                (!fx.shadows.is_empty() || fx.blur > 0.0 || fx.backdrop_blur > 0.0)
-                    .then(|| Box::new(fx))
+                (!fx.shadows.is_empty()
+                    || fx.blur > 0.0
+                    || fx.backdrop_blur > 0.0
+                    || !fx.shaders.is_empty())
+                .then(|| Box::new(fx))
             }
             None => None,
         };
@@ -794,6 +836,10 @@ impl<'a> Builder<'a> {
             Kind::Script => KindData::Script {
                 uri: pick!(script_uri)
                     .map_or_else(|| Arc::from(""), |(_, s)| Arc::from(s.as_str())),
+                inputs: match pick!(inputs) {
+                    Some((ns, m)) => self.params(ns, Some(m), theme),
+                    None => Arc::from([]),
+                },
             },
             Kind::Browser => KindData::Browser {
                 url: pick!(url).map_or_else(|| Arc::from(""), |(_, s)| Arc::from(s.as_str())),
@@ -1029,8 +1075,22 @@ impl<'a> Builder<'a> {
                     blend: blend(m.blend_mode),
                 }
             }
-            // Shaders are not part of the display list contract.
-            Fill::Shader(_) | Fill::Unknown(_) => return None,
+            Fill::Shader(sh) => {
+                let opacity = sh
+                    .opacity
+                    .as_ref()
+                    .map_or(1.0, |o| self.num(ns, o, theme).unwrap_or(1.0))
+                    as f32;
+                PaintLayer {
+                    paint: PaintSpec::Shader(Box::new(ShaderSpec {
+                        url: sh.url.as_deref().unwrap_or("").into(),
+                        uniforms: self.params(ns, sh.uniforms.as_ref(), theme),
+                        opacity,
+                    })),
+                    blend: blend(sh.blend_mode),
+                }
+            }
+            Fill::Unknown(_) => return None,
         })
     }
 
@@ -1080,8 +1140,47 @@ impl<'a> Builder<'a> {
                     blend: s.blend_mode.map_or(BlendMode::Normal, map_blend),
                 });
             }
+            Effect::Shader(sh) if self.enabled(ns, sh.enabled.as_ref(), theme) => {
+                fx.shaders.push(ShaderSpec {
+                    url: sh.url.as_deref().unwrap_or("").into(),
+                    uniforms: self.params(ns, sh.uniforms.as_ref(), theme),
+                    opacity: 1.0,
+                });
+            }
             _ => {}
         }
+    }
+
+    /// Script inputs / shader uniforms with `$variables` resolved (unresolved ones are
+    /// dropped, so the script or shader default applies).
+    fn params(
+        &mut self,
+        ns: u16,
+        map: Option<&IndexMap<String, pen_schema::Scalar>>,
+        theme: ThemeId,
+    ) -> Arc<[(Arc<str>, ParamValue)]> {
+        let Some(map) = map else {
+            return Arc::from([]);
+        };
+        let mut out = Vec::with_capacity(map.len());
+        for (k, v) in map {
+            let val = match v {
+                pen_schema::Scalar::Number(n) => ParamValue::Num(*n),
+                pen_schema::Scalar::Bool(b) => ParamValue::Bool(*b),
+                pen_schema::Scalar::Vector(v) => ParamValue::Vec(v.iter().copied().collect()),
+                pen_schema::Scalar::Str(s) => match s.var() {
+                    Some(name) => match self.vcx().resolve(ns, name, theme) {
+                        Some(crate::vars::VarVal::Num(n)) => ParamValue::Num(n),
+                        Some(crate::vars::VarVal::Bool(b)) => ParamValue::Bool(b),
+                        Some(crate::vars::VarVal::Str(s)) => ParamValue::Str(s),
+                        None => continue,
+                    },
+                    None => ParamValue::Str(Arc::from(s.raw())),
+                },
+            };
+            out.push((Arc::from(k.as_str()), val));
+        }
+        out.into()
     }
 }
 

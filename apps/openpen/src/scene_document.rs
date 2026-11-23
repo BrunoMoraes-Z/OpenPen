@@ -21,6 +21,7 @@ use pen_render::{Affine2, Color, DisplayList, Rect, Vec2};
 use pen_schema::{self as ps, Bind, NodeField};
 
 use crate::geom::{BoxGeom, Obb, SpatialIndex, normalize_deg};
+use crate::inspector::fill::{self, PaintOp};
 use crate::inspector::model::{
     Align, Effect, EffectKind, Justify, LayoutMode, LayoutProps, NodeProps, Paint, PaintKind,
     PropEdit, PropertySource, StrokeAlign, TextAlign, TextProps, TextVAlign,
@@ -298,8 +299,13 @@ fn set_fill_enabled(f: &mut ps::Fill, on: bool) {
 }
 
 /// Converts the schema paint list to inspector paints; `resolved` are the
-/// scene's enabled paints (used for variable-bound colors).
-fn paints_from_schema(list: &[ps::Fill], resolved: &[pen_doc::PaintLayer]) -> Vec<Paint> {
+/// scene's enabled paints (fallback for variable-bound solid colors) and
+/// `resolve` resolves `$variables` (gradient stops).
+fn paints_from_schema(
+    list: &[ps::Fill],
+    resolved: &[pen_doc::PaintLayer],
+    resolve: &mut fill::Resolve,
+) -> Vec<Paint> {
     let mut ri = 0;
     list.iter()
         .map(|f| {
@@ -314,61 +320,177 @@ fn paints_from_schema(list: &[ps::Fill], resolved: &[pen_doc::PaintLayer]) -> Ve
                 PaintSpec::Solid(c) => Some(color_u32(*c)),
                 _ => None,
             });
-            let color =
-                |c: &ps::ColorOrVar| c.rgba().map(rgba_u32).or(res_color).unwrap_or(0x808080ff);
-            let kind = match f {
-                ps::Fill::Solid(c) => PaintKind::Solid(color(c)),
-                ps::Fill::Color(cf) => {
-                    PaintKind::Solid(cf.color.as_ref().map(color).unwrap_or(0x000000ff))
-                }
-                ps::Fill::Gradient(g) => match g.gradient_type {
-                    Some(ps::paint::GradientType::Radial) => PaintKind::RadialGradient,
-                    _ => PaintKind::LinearGradient,
-                },
-                ps::Fill::Image(_) => PaintKind::Image,
-                _ => PaintKind::RadialGradient,
+            let mut color = |c: &ps::ColorOrVar| -> Option<u32> {
+                Some(
+                    c.rgba()
+                        .map(rgba_u32)
+                        .or_else(|| resolve(c))
+                        .or(res_color)
+                        .unwrap_or(0x808080ff),
+                )
             };
-            let opacity = match kind {
-                PaintKind::Solid(c) => (c & 0xff) as f32 / 255.0,
-                _ => 1.0,
-            };
-            Paint {
-                kind,
-                opacity,
+            let mut paint = Paint {
+                kind: PaintKind::Unknown,
+                opacity: 1.0,
                 visible: enabled,
+                var: None,
+                gradient: None,
+                image: None,
+            };
+            match f {
+                ps::Fill::Solid(c) => {
+                    paint.kind = PaintKind::Solid(color(c).unwrap_or(0x808080ff));
+                    paint.var = c.var().map(str::to_string);
+                }
+                ps::Fill::Color(cf) => {
+                    let c = cf.color.as_ref().and_then(&mut color);
+                    paint.kind = PaintKind::Solid(c.unwrap_or(0x000000ff));
+                    paint.var = cf.color.as_ref().and_then(|c| c.var()).map(str::to_string);
+                }
+                ps::Fill::Gradient(g) => {
+                    let info = fill::gradient_info(g, &mut color);
+                    paint.kind = match info.kind {
+                        fill::GradKind::Linear => PaintKind::LinearGradient,
+                        fill::GradKind::Radial => PaintKind::RadialGradient,
+                        fill::GradKind::Angular => PaintKind::AngularGradient,
+                    };
+                    paint.opacity = info.opacity;
+                    paint.gradient = Some(info);
+                }
+                ps::Fill::Image(i) => {
+                    let info = fill::image_info(i);
+                    paint.kind = PaintKind::Image;
+                    paint.opacity = info.opacity;
+                    paint.image = Some(info);
+                }
+                ps::Fill::MeshGradient(m) => {
+                    paint.kind = PaintKind::MeshGradient;
+                    paint.opacity = m.opacity.as_ref().map_or(1.0, |o| o.value_or(1.0) as f32);
+                }
+                ps::Fill::Shader(sh) => {
+                    paint.kind = PaintKind::Shader;
+                    paint.opacity = sh.opacity.as_ref().map_or(1.0, |o| o.value_or(1.0) as f32);
+                }
+                ps::Fill::Unknown(_) => {}
             }
+            if let PaintKind::Solid(c) = paint.kind {
+                paint.opacity = (c & 0xff) as f32 / 255.0;
+            }
+            paint
         })
         .collect()
+}
+
+fn gradient_from_scene(g: &pen_doc::GradientSpec) -> fill::GradientInfo {
+    fill::GradientInfo {
+        kind: match g.kind {
+            pen_doc::GradientKind::Linear => fill::GradKind::Linear,
+            pen_doc::GradientKind::Radial => fill::GradKind::Radial,
+            pen_doc::GradientKind::Angular => fill::GradKind::Angular,
+        },
+        center: g.center,
+        size: g.size,
+        rotation: g.rotation,
+        opacity: 1.0,
+        stops: g
+            .stops
+            .iter()
+            .map(|(o, c)| fill::Stop {
+                position: *o,
+                color: color_u32(*c),
+                var: None,
+            })
+            .collect(),
+    }
 }
 
 fn paints_from_scene(list: &[pen_doc::PaintLayer]) -> Vec<Paint> {
     list.iter()
         .map(|p| {
-            let kind = match &p.paint {
-                PaintSpec::Solid(c) => PaintKind::Solid(color_u32(*c)),
-                PaintSpec::Gradient(g) => match g.kind {
-                    pen_doc::GradientKind::Linear => PaintKind::LinearGradient,
-                    _ => PaintKind::RadialGradient,
-                },
-                PaintSpec::Image(_) => PaintKind::Image,
-            };
-            let opacity = match kind {
-                PaintKind::Solid(c) => (c & 0xff) as f32 / 255.0,
-                _ => 1.0,
-            };
-            Paint {
-                kind,
-                opacity,
-                visible: true,
+            let mut paint = Paint::solid(0);
+            match &p.paint {
+                PaintSpec::Solid(c) => paint.kind = PaintKind::Solid(color_u32(*c)),
+                PaintSpec::Gradient(g) => {
+                    let info = gradient_from_scene(g);
+                    paint.kind = match info.kind {
+                        fill::GradKind::Linear => PaintKind::LinearGradient,
+                        fill::GradKind::Radial => PaintKind::RadialGradient,
+                        fill::GradKind::Angular => PaintKind::AngularGradient,
+                    };
+                    paint.gradient = Some(info);
+                }
+                PaintSpec::Image(i) => {
+                    paint.kind = PaintKind::Image;
+                    paint.opacity = i.opacity;
+                    paint.image = Some(fill::ImageInfo {
+                        url: i.url.to_string(),
+                        fit: match i.mode {
+                            pen_doc::ImageMode::Stretch => fill::ImageFit::Stretch,
+                            pen_doc::ImageMode::Contain => fill::ImageFit::Fit,
+                            pen_doc::ImageMode::Cover => fill::ImageFit::Fill,
+                        },
+                        opacity: i.opacity,
+                    });
+                }
+                #[allow(unreachable_patterns)]
+                _ => paint.kind = PaintKind::Shader,
             }
+            if let PaintKind::Solid(c) = paint.kind {
+                paint.opacity = (c & 0xff) as f32 / 255.0;
+            }
+            paint
         })
         .collect()
 }
 
+/// Schema form of resolved paints (nodes inside instances, which have no
+/// schema node of their own: edits become overrides).
 fn schema_from_scene_paints(list: &[pen_doc::PaintLayer]) -> Vec<ps::Fill> {
     list.iter()
         .filter_map(|p| match &p.paint {
             PaintSpec::Solid(c) => Some(ps::Fill::Solid(ps::ColorOrVar(color_hex(*c)))),
+            PaintSpec::Gradient(g) => Some(ps::Fill::Gradient(Box::new(ps::GradientFill {
+                enabled: Some(Bind::Value(true)),
+                gradient_type: Some(match g.kind {
+                    pen_doc::GradientKind::Linear => ps::GradientType::Linear,
+                    pen_doc::GradientKind::Radial => ps::GradientType::Radial,
+                    pen_doc::GradientKind::Angular => ps::GradientType::Angular,
+                }),
+                center: Some(ps::Point {
+                    x: Some(g.center[0] as f64),
+                    y: Some(g.center[1] as f64),
+                    ..Default::default()
+                }),
+                size: Some(ps::GradientSize {
+                    width: Some(Bind::Value(g.size[0] as f64)),
+                    height: Some(Bind::Value(g.size[1] as f64)),
+                    ..Default::default()
+                }),
+                rotation: Some(Bind::Value(g.rotation as f64)),
+                colors: Some(
+                    g.stops
+                        .iter()
+                        .map(|(o, c)| ps::ColorStop {
+                            color: Some(ps::ColorOrVar(color_hex(*c))),
+                            position: Some(Bind::Value(*o as f64)),
+                            ..Default::default()
+                        })
+                        .collect(),
+                ),
+                ..Default::default()
+            }))),
+            PaintSpec::Image(i) => Some(ps::Fill::Image(Box::new(ps::ImageFill {
+                enabled: Some(Bind::Value(true)),
+                url: Some(i.url.to_string()),
+                mode: Some(match i.mode {
+                    pen_doc::ImageMode::Stretch => ps::ImageMode::Stretch,
+                    pen_doc::ImageMode::Contain => ps::ImageMode::Contain,
+                    pen_doc::ImageMode::Cover => ps::ImageMode::Cover,
+                }),
+                opacity: (i.opacity < 1.0).then_some(Bind::Value(i.opacity as f64)),
+                ..Default::default()
+            }))),
+            #[allow(unreachable_patterns)]
             _ => None,
         })
         .collect()
@@ -444,6 +566,10 @@ impl SceneDocument {
     fn from_scene(mut scene: SceneDoc, text: TextEngine, dir: Option<PathBuf>) -> SceneDocument {
         // Images decode in the background; see `poll_assets`.
         let mut pipe = Pipeline::new(text, Box::new(FsAssets::deferred(dir)));
+        // Script nodes run synchronously on update; shaders render on a worker thread and
+        // arrive through `poll_assets` like images.
+        pipe.set_script_runner(Box::new(pen_script::ScriptNodeRunner::new()));
+        pipe.set_shader_renderer(Arc::new(pen_shader::ShaderEngine::deferred()));
         pipe.rebuild(&mut scene);
         let list = Arc::new(pipe.list.clone());
         let mut d = SceneDocument {
@@ -1856,7 +1982,10 @@ impl SceneDocument {
                         PaintKind::Solid(c) => Some(c),
                         _ => None,
                     });
-                let Some(c) = cur else { return false };
+                let Some(c) = cur else {
+                    // Gradient / image: the paint's own opacity.
+                    return self.apply_paint_op(k, false, i, &PaintOp::Opacity(*o));
+                };
                 let a = (o.clamp(0.0, 1.0) * 255.0).round() as u32;
                 return self.apply_edit(k, &PropEdit::SetFillColor(i, (c & !0xff) | a));
             }
@@ -1972,9 +2101,15 @@ impl SceneDocument {
                         PaintKind::Solid(c) => Some(c),
                         _ => None,
                     });
-                let Some(c) = cur else { return false };
+                let Some(c) = cur else {
+                    // Gradient / image: the paint's own opacity.
+                    return self.apply_paint_op(k, true, i, &PaintOp::Opacity(*o));
+                };
                 let a = (o.clamp(0.0, 1.0) * 255.0).round() as u32;
                 return self.apply_edit(k, &PropEdit::SetStrokeColor(i, (c & !0xff) | a));
+            }
+            PropEdit::Paint { stroke, index, op } => {
+                return self.apply_paint_op(k, *stroke, *index, op);
             }
             PropEdit::SetEffect(i, prm) => {
                 let mut list = self.schema_effects(k);
@@ -1997,6 +2132,38 @@ impl SceneDocument {
             }
         }
         self.set(k, p)
+    }
+
+    /// Gradient / image / type edit of paint `i` of node `k` (one `DocOp`).
+    pub fn apply_paint_op(&mut self, k: NodeKey, stroke: bool, i: usize, op: &PaintOp) -> bool {
+        let Some(theme) = self.scene.get(k).map(|n| n.theme) else {
+            return false;
+        };
+        let mut list = self.schema_paints(k, stroke);
+        let Some(f) = list.get_mut(i) else {
+            return false;
+        };
+        let before = f.clone();
+        let scene = &mut self.scene;
+        let mut resolve = |c: &ps::ColorOrVar| -> Option<u32> {
+            let v = scene.resolve_variable(c.var()?, Some(theme))?;
+            v.as_color().map(rgba_u32)
+        };
+        if !fill::apply(f, op, &mut resolve) || *f == before {
+            return false;
+        }
+        self.write_paints(k, stroke, list)
+    }
+
+    /// Rebuilds what shows images whose file changed on disk (call when the
+    /// window regains focus). True if the display list changed.
+    pub fn reload_changed_assets(&mut self) -> bool {
+        if !self.pipe.reload_changed_assets(&self.scene) {
+            return false;
+        }
+        self.list = Arc::new(self.pipe.list.clone());
+        self.revision = next_revision();
+        true
     }
 
     pub fn set_visible_key(&mut self, k: NodeKey, visible: bool) -> bool {
@@ -2060,8 +2227,14 @@ impl SceneDocument {
         if matches!(n.origin, Origin::Doc) {
             let fills = self.schema_paints(k, false);
             let strokes = self.schema_paints(k, true);
-            p.fills = paints_from_schema(&fills, &n.fills);
-            p.strokes = paints_from_schema(&strokes, stroke_paints);
+            let theme = n.theme;
+            let scene = &mut self.scene;
+            let mut resolve = |c: &ps::ColorOrVar| -> Option<u32> {
+                let v = scene.resolve_variable(c.var()?, Some(theme))?;
+                v.as_color().map(rgba_u32)
+            };
+            p.fills = paints_from_schema(&fills, &n.fills, &mut resolve);
+            p.strokes = paints_from_schema(&strokes, stroke_paints, &mut resolve);
             p.effects = self
                 .schema_effects(k)
                 .iter()

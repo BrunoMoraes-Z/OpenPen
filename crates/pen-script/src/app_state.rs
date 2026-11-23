@@ -178,7 +178,7 @@ fn node_line(scene: &SceneDoc, doc: &Document, k: NodeKey) -> Option<String> {
             .and_then(|s| s.kind.as_ref())
             .map(|k| k.as_str().to_string())
             .unwrap_or_else(|| kind_name(n.kind).to_string()),
-        Origin::Instance { .. } => kind_name(n.kind).to_string(),
+        Origin::Instance { .. } | Origin::Generated { .. } => kind_name(n.kind).to_string(),
     };
     let name = n.name.as_deref().unwrap_or("(unnamed)");
     let reusable = if matches!(n.origin, Origin::Doc)

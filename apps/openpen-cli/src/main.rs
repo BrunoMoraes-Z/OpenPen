@@ -326,6 +326,8 @@ fn run_render(
         pen_layout::TextEngine::new(),
         Box::new(pen_layout::FsAssets::new(Some(dir.to_path_buf()))),
     );
+    pipe.set_script_runner(Box::new(pen_script::ScriptNodeRunner::new()));
+    pipe.set_shader_renderer(std::sync::Arc::new(pen_shader::ShaderEngine::new()));
     pipe.rebuild(&mut scene);
     let (list, viewport) = match node {
         Some(id) => {

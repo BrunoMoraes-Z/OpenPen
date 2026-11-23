@@ -86,8 +86,7 @@ fn sample_props(tree: &PlaceholderTree, id: LayerId) -> NodeProps {
         LayerKind::Image => {
             p.fills = vec![Paint {
                 kind: PaintKind::Image,
-                opacity: 1.0,
-                visible: true,
+                ..Paint::solid(0)
             }];
             p.effects = vec![Effect::new(EffectKind::DropShadow)];
             p.corner_radius = [16.0; 4];

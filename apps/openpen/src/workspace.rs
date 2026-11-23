@@ -88,11 +88,21 @@ pub fn cli_paths(args: impl IntoIterator<Item = String>) -> Vec<PathBuf> {
 
 impl Workspace {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let subs = vec![cx.observe_window_appearance(window, |this, window, cx| {
-            if this.theme_override.is_none() {
-                theme::apply(theme::mode_for(window.appearance()), cx);
-            }
-        })];
+        let subs = vec![
+            cx.observe_window_appearance(window, |this, window, cx| {
+                if this.theme_override.is_none() {
+                    theme::apply(theme::mode_for(window.appearance()), cx);
+                }
+            }),
+            // Back from another app: image files may have changed on disk.
+            cx.observe_window_activation(window, |this, window, cx| {
+                if window.is_window_active() {
+                    for t in &this.tabs {
+                        t.state.update(cx, |s, cx| s.reload_changed_assets(cx));
+                    }
+                }
+            }),
+        ];
         let theme_override = cx.try_global::<theme::ThemeOverride>().and_then(|o| o.0);
         let weak = cx.entity().downgrade();
         cx.set_global(WorkspaceRef(weak.clone()));

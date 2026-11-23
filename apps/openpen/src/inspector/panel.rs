@@ -10,14 +10,17 @@ use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{Icon, Sizable};
+use gpui_kit::component::{Icon, Sizable, WindowExt};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
+use super::fill::{
+    self, FillEditTarget, FillType, GradKind, GradientInfo, ImageFit, ImageInfo, PaintOp,
+};
 use super::model::{
-    EffectKind, EffectParams, Justify, LayoutMode, NodeProps, PaintKind, PropEdit, StrokeAlign,
-    TextAlign, TextVAlign, from_grid_cell, grid_cell, hsv_to_rgba, parse_hex_color, rgba_to_hsv,
-    weight_label,
+    EffectKind, EffectParams, Justify, LayoutMode, NodeProps, Paint, PaintKind, PropEdit,
+    StrokeAlign, TextAlign, TextVAlign, from_grid_cell, grid_cell, hsv_to_rgba, parse_hex_color,
+    rgba_to_hsv, weight_label,
 };
 use super::value::{
     ScrubMods, ScrubSpec, SizeMode, SizeValue, common, format_number, format_percent, format_with,
@@ -224,7 +227,34 @@ struct ColorEdit {
     drag: Option<PickDrag>,
     sv_bounds: Rc<Cell<Bounds<Pixels>>>,
     hue_bounds: Rc<Cell<Bounds<Pixels>>>,
+    /// Gradient stop selected in the bar, the list or on the canvas.
+    stop: Option<usize>,
+    bar_bounds: Rc<Cell<Bounds<Pixels>>>,
 }
+
+/// Drag of a gradient stop on the stop bar (one undo step).
+struct StopDrag {
+    index: usize,
+    start: Point<Pixels>,
+    /// Moved past the drag threshold.
+    started: bool,
+    /// Pulled away from the bar: removed on release.
+    off: bool,
+}
+
+/// What a text segment does.
+#[derive(Clone)]
+enum SegAction {
+    Type(FillType),
+    Op(PaintOp),
+}
+
+/// Vertical distance (px) from the stop bar past which a dragged stop is
+/// removed on release.
+const STOP_DRAG_OFF: f32 = 28.0;
+
+/// Image formats the renderer decodes.
+const IMAGE_EXTENSIONS: [&str; 4] = ["png", "jpg", "jpeg", "webp"];
 
 /// Drag of a fill/stroke row by its grip (reorder).
 struct PaintDrag {
@@ -256,6 +286,14 @@ pub struct InspectorPanel {
     color_edit: Option<ColorEdit>,
     pop_hex: Entity<InputState>,
     pop_pct: Entity<InputState>,
+    /// Image fill path / URL and gradient angle of the fill popover.
+    pop_url: Entity<InputState>,
+    pop_angle: Entity<InputState>,
+    /// Position inputs of the gradient stops (by stop index).
+    stop_inputs: HashMap<usize, Entity<InputState>>,
+    stop_drag: Option<StopDrag>,
+    /// Focus of the fill popover (Delete removes the selected stop).
+    pop_focus: FocusHandle,
     paint_drag: Option<PaintDrag>,
     /// Effect whose parameters are shown.
     fx_open: Option<usize>,
@@ -271,7 +309,16 @@ pub struct InspectorPanel {
 
 impl InspectorPanel {
     pub fn new(state: Entity<EditorState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let mut subs = vec![cx.observe_in(&state, window, |this, _, window, cx| {
+        let mut subs = vec![cx.observe_in(&state, window, |this, st, window, cx| {
+            // The canvas (or Delete) changed the selected gradient stop.
+            let fe = st.read(cx).fill_edit;
+            if let (Some(ce), Some(fe)) = (&mut this.color_edit, fe)
+                && Self::paint_ref(ce.target) == Some((fe.stroke, fe.index))
+                && ce.stop != fe.stop
+            {
+                ce.stop = fe.stop;
+                this.refresh_picker(cx);
+            }
             this.sync_inputs(window, cx);
             cx.notify();
         })];
@@ -306,6 +353,50 @@ impl InspectorPanel {
                 },
             ));
         }
+        let pop_url = cx.new(|cx| InputState::new(window, cx).placeholder("Image path or URL"));
+        subs.push(cx.subscribe_in(
+            &pop_url,
+            window,
+            move |this, input, ev: &InputEvent, window, cx| {
+                if committed(ev) {
+                    let t = input.read(cx).value().trim().to_string();
+                    let cur = this
+                        .color_edit
+                        .as_ref()
+                        .and_then(|c| this.target_paint(c.target, cx))
+                        .and_then(|p| p.image)
+                        .map(|i| i.url);
+                    if cur.is_some_and(|u| u != t) {
+                        this.popover_op(PaintOp::ImageUrl(t), cx);
+                        this.state.update(cx, |s, cx| s.watch_assets(cx));
+                    }
+                    this.sync_inputs(window, cx);
+                }
+            },
+        ));
+        let pop_angle = cx.new(|cx| InputState::new(window, cx));
+        subs.push(cx.subscribe_in(
+            &pop_angle,
+            window,
+            move |this, input, ev: &InputEvent, window, cx| {
+                if committed(ev) {
+                    let text = input.read(cx).value().to_string();
+                    let cur = this
+                        .color_edit
+                        .as_ref()
+                        .and_then(|c| this.target_paint(c.target, cx))
+                        .and_then(|p| p.gradient)
+                        .map(|g| fill::display_angle(g.rotation));
+                    if let Some(cur) = cur
+                        && let Some(v) = parse_number_input(text.trim().trim_end_matches('°'), cur)
+                        && (v - cur).abs() > 1e-3
+                    {
+                        this.popover_op(PaintOp::Rotation(fill::rotation_from_display(v)), cx);
+                    }
+                    this.sync_inputs(window, cx);
+                }
+            },
+        ));
         let mut fx_inputs = HashMap::new();
         for f in [FxField::X, FxField::Y, FxField::Blur, FxField::Color] {
             let input = cx.new(|cx| InputState::new(window, cx));
@@ -365,6 +456,11 @@ impl InspectorPanel {
             color_edit: None,
             pop_hex,
             pop_pct,
+            pop_url,
+            pop_angle,
+            stop_inputs: HashMap::new(),
+            stop_drag: None,
+            pop_focus: cx.focus_handle(),
             paint_drag: None,
             fx_open: None,
             fx_inputs,
@@ -407,20 +503,34 @@ impl InspectorPanel {
     /// Solid color (0xRRGGBBAA) of a fill / stroke / shadow of the first
     /// selected node.
     fn target_color(&self, t: ColorTarget, cx: &App) -> Option<u32> {
-        let p = self.selected_props(cx).first().copied()?;
-        let paint = |l: &[super::model::Paint], i: usize| match l.get(i)?.kind {
+        if let ColorTarget::Effect(i) = t {
+            let p = self.selected_props(cx).first().copied()?;
+            return p.effects.get(i).map(|e| e.color);
+        }
+        let paint = self.target_paint(t, cx)?;
+        match paint.kind {
             PaintKind::Solid(c) => Some(c),
-            _ => None,
-        };
-        match t {
-            ColorTarget::Fill(i) => paint(&p.fills, i),
-            ColorTarget::Stroke(i) => paint(&p.strokes, i),
-            ColorTarget::Effect(i) => p.effects.get(i).map(|e| e.color),
+            // Gradients: the color of the stop the picker edits.
+            _ => {
+                let s = self.picked_stop(&paint)?;
+                Some(paint.gradient.as_ref()?.stops[s].color)
+            }
         }
     }
 
     /// Edit that sets the color of `t`.
     fn color_edit_for(&self, t: ColorTarget, c: u32, cx: &App) -> Option<PropEdit> {
+        if let Some((stroke, index)) = Self::paint_ref(t)
+            && let Some(paint) = self.target_paint(t, cx)
+            && paint.gradient.is_some()
+        {
+            let s = self.picked_stop(&paint)?;
+            return Some(PropEdit::Paint {
+                stroke,
+                index,
+                op: PaintOp::StopColor(s, c),
+            });
+        }
         Some(match t {
             ColorTarget::Fill(i) => PropEdit::SetFillColor(i, c),
             ColorTarget::Stroke(i) => PropEdit::SetStrokeColor(i, c),
@@ -469,6 +579,23 @@ impl InspectorPanel {
         } else {
             ColorTarget::Fill(i)
         };
+        // Gradient / image rows: the % field is the paint opacity.
+        if let Some(paint) = self.target_paint(t, cx)
+            && !matches!(paint.kind, PaintKind::Solid(_))
+        {
+            match parse_percent(text, paint.opacity) {
+                Some(o) if (o - paint.opacity).abs() > 1e-4 => self.apply(
+                    if stroke {
+                        PropEdit::SetStrokeOpacity(i, o)
+                    } else {
+                        PropEdit::SetFillOpacity(i, o)
+                    },
+                    cx,
+                ),
+                _ => self.sync_inputs(window, cx),
+            }
+            return;
+        }
         let Some(c) = self.target_color(t, cx) else {
             return;
         };
@@ -571,6 +698,50 @@ impl InspectorPanel {
         }
     }
 
+    /// Creates the position inputs of the open gradient's stops.
+    fn ensure_stop_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let n = self
+            .color_edit
+            .as_ref()
+            .and_then(|c| self.target_paint(c.target, cx))
+            .and_then(|p| p.gradient)
+            .map_or(0, |g| g.stops.len());
+        let mut created = false;
+        for i in 0..n {
+            if self.stop_inputs.contains_key(&i) {
+                continue;
+            }
+            let input = cx.new(|cx| InputState::new(window, cx));
+            self._subs.push(cx.subscribe_in(
+                &input,
+                window,
+                move |this, input, ev: &InputEvent, window, cx| {
+                    if matches!(ev, InputEvent::PressEnter { .. } | InputEvent::Blur) {
+                        let text = input.read(cx).value().to_string();
+                        let cur = this
+                            .color_edit
+                            .as_ref()
+                            .and_then(|c| this.target_paint(c.target, cx))
+                            .and_then(|p| p.gradient)
+                            .and_then(|g| g.stops.get(i).map(|s| s.position));
+                        if let Some(cur) = cur
+                            && let Some(v) = parse_percent(text.trim(), cur)
+                            && (v - cur).abs() > 1e-4
+                        {
+                            this.popover_op(PaintOp::StopPosition(i, v.clamp(0.0, 1.0)), cx);
+                        }
+                        this.sync_inputs(window, cx);
+                    }
+                },
+            ));
+            self.stop_inputs.insert(i, input);
+            created = true;
+        }
+        if created {
+            self.sync_inputs(window, cx);
+        }
+    }
+
     fn sync_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mut set = |input: &Entity<InputState>, text: String, cx: &mut Context<Self>| {
             let focused = input.read(cx).focus_handle(cx).is_focused(window);
@@ -582,10 +753,43 @@ impl InspectorPanel {
         if let Some(props) = &props {
             for (&(stroke, i), (hex, pct)) in &self.paint_inputs {
                 let list = if stroke { &props.strokes } else { &props.fills };
-                if let Some(PaintKind::Solid(c)) = list.get(i).map(|p| p.kind) {
-                    set(hex, format!("{:06X}", c >> 8), cx);
-                    set(pct, format_percent((c & 0xff) as f32 / 255.0), cx);
+                match list.get(i) {
+                    Some(Paint {
+                        kind: PaintKind::Solid(c),
+                        ..
+                    }) => {
+                        set(hex, format!("{:06X}", c >> 8), cx);
+                        set(pct, format_percent((c & 0xff) as f32 / 255.0), cx);
+                    }
+                    Some(p) => set(pct, format_percent(p.opacity), cx),
+                    None => {}
                 }
+            }
+            let open = self
+                .color_edit
+                .as_ref()
+                .and_then(|c| Self::paint_ref(c.target))
+                .and_then(|(stroke, i)| {
+                    if stroke {
+                        props.strokes.get(i)
+                    } else {
+                        props.fills.get(i)
+                    }
+                });
+            if let Some(g) = open.and_then(|p| p.gradient.as_ref()) {
+                set(
+                    &self.pop_angle,
+                    format!("{}°", format_number(fill::display_angle(g.rotation))),
+                    cx,
+                );
+                for (&i, input) in &self.stop_inputs {
+                    if let Some(s) = g.stops.get(i) {
+                        set(input, format_percent(s.position), cx);
+                    }
+                }
+            }
+            if let Some(img) = open.and_then(|p| p.image.as_ref()) {
+                set(&self.pop_url, img.url.clone(), cx);
             }
             if let Some(e) = self.fx_open.and_then(|i| props.effects.get(i)) {
                 let vals = [
@@ -686,14 +890,21 @@ impl InspectorPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(c) = self.target_color(target, cx) else {
-            return;
+        let exists = match target {
+            ColorTarget::Effect(_) => self.target_color(target, cx).is_some(),
+            _ => self.target_paint(target, cx).is_some(),
         };
+        if !exists {
+            return;
+        }
         if self.color_edit.as_ref().is_some_and(|e| e.target == target) {
             self.color_edit = None;
+            self.push_fill_edit(cx);
             cx.notify();
             return;
         }
+        // Gradients: the picker starts on the first stop.
+        let c = self.target_color(target, cx).unwrap_or(0x000000ff);
         // Left of the inspector island, like Pen's color picker.
         let vw = window.viewport_size().width;
         let at = point(
@@ -708,7 +919,10 @@ impl InspectorPanel {
             drag: None,
             sv_bounds: Rc::new(Cell::new(Bounds::default())),
             hue_bounds: Rc::new(Cell::new(Bounds::default())),
+            stop: None,
+            bar_bounds: Rc::new(Cell::new(Bounds::default())),
         });
+        self.push_fill_edit(cx);
         self.sync_inputs(window, cx);
         cx.notify();
     }
@@ -766,8 +980,257 @@ impl InspectorPanel {
         cx.notify();
     }
 
-    fn render_color_popover(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let ce = self.color_edit.as_ref()?;
+    // ------------------------------------------------------- fill popover
+
+    fn paint_ref(t: ColorTarget) -> Option<(bool, usize)> {
+        match t {
+            ColorTarget::Fill(i) => Some((false, i)),
+            ColorTarget::Stroke(i) => Some((true, i)),
+            ColorTarget::Effect(_) => None,
+        }
+    }
+
+    /// Paint `t` of the first selected node.
+    fn target_paint(&self, t: ColorTarget, cx: &App) -> Option<Paint> {
+        let (stroke, i) = Self::paint_ref(t)?;
+        let p = self.selected_props(cx).first().copied()?;
+        let l = if stroke { &p.strokes } else { &p.fills };
+        l.get(i).cloned()
+    }
+
+    /// Stop the color picker edits: the selected one, else the first by
+    /// position.
+    fn picked_stop(&self, paint: &Paint) -> Option<usize> {
+        let g = paint.gradient.as_ref()?;
+        self.color_edit
+            .as_ref()
+            .and_then(|c| c.stop)
+            .filter(|&s| s < g.stops.len())
+            .or_else(|| g.sorted().first().copied())
+    }
+
+    /// Applies a paint op to the paint open in the popover (every selected
+    /// node, one undo step unless a gesture is open).
+    fn popover_op(&mut self, op: PaintOp, cx: &mut Context<Self>) {
+        let Some((stroke, index)) = self
+            .color_edit
+            .as_ref()
+            .and_then(|c| Self::paint_ref(c.target))
+        else {
+            return;
+        };
+        self.apply(PropEdit::Paint { stroke, index, op }, cx);
+    }
+
+    /// Mirrors the open paint / selected stop into the editor state (canvas
+    /// handles, Delete).
+    fn push_fill_edit(&self, cx: &mut Context<Self>) {
+        let want = self.color_edit.as_ref().and_then(|c| {
+            let (stroke, index) = Self::paint_ref(c.target)?;
+            Some(FillEditTarget {
+                stroke,
+                index,
+                stop: c.stop,
+            })
+        });
+        if self.state.read(cx).fill_edit != want {
+            self.state.update(cx, |s, cx| s.set_fill_edit(want, cx));
+        }
+    }
+
+    /// Re-seeds the picker from the color it edits (stop selection, type
+    /// change).
+    fn refresh_picker(&mut self, cx: &mut Context<Self>) {
+        let Some(t) = self.color_edit.as_ref().map(|c| c.target) else {
+            return;
+        };
+        if let Some(c) = self.target_color(t, cx)
+            && let Some(ce) = &mut self.color_edit
+        {
+            ce.hsv = rgba_to_hsv(c);
+            ce.alpha = c & 0xff;
+        }
+    }
+
+    fn select_stop(&mut self, s: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(ce) = &mut self.color_edit {
+            ce.stop = s;
+        }
+        if s.is_some() {
+            // Out of any text field: Delete now removes the stop.
+            window.focus(&self.pop_focus, cx);
+        }
+        self.push_fill_edit(cx);
+        self.refresh_picker(cx);
+        self.sync_inputs(window, cx);
+        cx.notify();
+    }
+
+    /// Switches the open paint to another type.
+    fn set_fill_type(&mut self, t: FillType, window: &mut Window, cx: &mut Context<Self>) {
+        let cur = self
+            .color_edit
+            .as_ref()
+            .and_then(|c| self.target_paint(c.target, cx))
+            .and_then(|p| p.fill_type());
+        if cur == Some(t) {
+            return;
+        }
+        if let Some(ce) = &mut self.color_edit {
+            ce.stop = None;
+        }
+        self.popover_op(PaintOp::SetType(t), cx);
+        self.push_fill_edit(cx);
+        self.refresh_picker(cx);
+        self.sync_inputs(window, cx);
+        cx.notify();
+    }
+
+    /// Position (0..1, 2 decimals like Pen) of `x` on the stop bar.
+    fn bar_t(&self, x: Pixels) -> f32 {
+        let Some(b) = self.color_edit.as_ref().map(|c| c.bar_bounds.get()) else {
+            return 0.0;
+        };
+        let w = f32::from(b.size.width).max(1.0);
+        let t = (f32::from(x - b.origin.x) / w).clamp(0.0, 1.0);
+        (t * 100.0).round() / 100.0
+    }
+
+    /// Click on the stop bar: a new stop there (Pen), dragged right away.
+    fn on_bar_down(&mut self, pos: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(paint) = self
+            .color_edit
+            .as_ref()
+            .and_then(|c| self.target_paint(c.target, cx))
+        else {
+            return;
+        };
+        let Some(g) = &paint.gradient else { return };
+        let index = g.stops.len();
+        let t = self.bar_t(pos.x);
+        self.state.update(cx, |s, _| s.begin_gesture());
+        self.popover_op(PaintOp::AddStop(t), cx);
+        self.stop_drag = Some(StopDrag {
+            index,
+            start: pos,
+            started: true,
+            off: false,
+        });
+        self.select_stop(Some(index), window, cx);
+    }
+
+    fn on_marker_down(
+        &mut self,
+        index: usize,
+        pos: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.state.update(cx, |s, _| s.begin_gesture());
+        self.stop_drag = Some(StopDrag {
+            index,
+            start: pos,
+            started: false,
+            off: false,
+        });
+        self.select_stop(Some(index), window, cx);
+    }
+
+    fn on_stop_drag_move(&mut self, ev: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(bar) = self.color_edit.as_ref().map(|c| c.bar_bounds.get()) else {
+            return;
+        };
+        let t = self.bar_t(ev.position.x);
+        let Some(d) = &mut self.stop_drag else { return };
+        if !d.started {
+            if (f32::from(ev.position.x - d.start.x)).abs() < 3.0 {
+                return;
+            }
+            d.started = true;
+        }
+        // Dragged well away from the bar: removed on release.
+        let y = ev.position.y;
+        d.off = y < bar.origin.y - px(STOP_DRAG_OFF) || y > bar.bottom_left().y + px(STOP_DRAG_OFF);
+        let (off, index) = (d.off, d.index);
+        if !off {
+            self.popover_op(PaintOp::StopPosition(index, t), cx);
+        }
+        cx.notify();
+    }
+
+    fn end_stop_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(d) = self.stop_drag.take() else {
+            return;
+        };
+        if d.off {
+            self.popover_op(PaintOp::RemoveStop(d.index), cx);
+            self.select_stop(None, window, cx);
+        }
+        self.state.update(cx, |s, cx| s.end_gesture(cx));
+        cx.notify();
+    }
+
+    /// Opens the native file dialog and sets the picked image on the open
+    /// image fill (copied next to the document like Pen's import).
+    fn import_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((stroke, index)) = self
+            .color_edit
+            .as_ref()
+            .and_then(|c| Self::paint_ref(c.target))
+        else {
+            return;
+        };
+        let doc_dir = self
+            .state
+            .read(cx)
+            .path
+            .as_ref()
+            .and_then(|p| p.parent())
+            .map(std::path::Path::to_path_buf);
+        let rx = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Import image".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = rx.await else {
+                return;
+            };
+            let Some(picked) = paths.into_iter().next() else {
+                return;
+            };
+            let ok_ext = picked
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| IMAGE_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()));
+            let url = if ok_ext {
+                fill::image_url_for(doc_dir.as_deref(), &picked).map_err(|e| e.to_string())
+            } else {
+                Err("unsupported image format (PNG, JPEG or WebP)".to_string())
+            };
+            let _ = this.update_in(cx, |this, window, cx| match url {
+                Ok(url) => {
+                    this.apply(
+                        PropEdit::Paint {
+                            stroke,
+                            index,
+                            op: PaintOp::ImageUrl(url),
+                        },
+                        cx,
+                    );
+                    this.state.update(cx, |s, cx| s.watch_assets(cx));
+                    this.sync_inputs(window, cx);
+                }
+                Err(e) => window
+                    .push_notification(format!("Could not import {}: {e}", picked.display()), cx),
+            });
+        })
+        .detach();
+    }
+
+    /// Saturation/value square, hue strip and hex + % inputs.
+    fn render_picker(&self, ce: &ColorEdit, cx: &mut Context<Self>) -> Div {
         let p = cx.pal();
         let (h, sat, v) = ce.hsv;
         let hue: Hsla = hsla(h / 360.0, 1.0, 0.5, 1.0);
@@ -776,11 +1239,6 @@ impl InspectorPanel {
         let black: Hsla = hsla(0., 0., 0., 1.);
         let sv_cell = ce.sv_bounds.clone();
         let hue_cell = ce.hue_bounds.clone();
-        let title = match ce.target {
-            ColorTarget::Fill(_) => "Fill",
-            ColorTarget::Stroke(_) => "Stroke",
-            ColorTarget::Effect(_) => "Shadow color",
-        };
         let knob = |size: f32| {
             div()
                 .absolute()
@@ -805,177 +1263,654 @@ impl InspectorPanel {
                 linear_color_stop(b, 1.),
             )));
         }
-        let body =
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(
+                div()
+                    .id("color-sv")
+                    .relative()
+                    .h(px(150.))
+                    .w_full()
+                    .rounded(px(4.))
+                    .bg(hue)
+                    .cursor(CursorStyle::Crosshair)
+                    .child(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .rounded(px(4.))
+                            .bg(linear_gradient(
+                                90.,
+                                linear_color_stop(white, 0.),
+                                linear_color_stop(white.opacity(0.), 1.),
+                            )),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .rounded(px(4.))
+                            .bg(linear_gradient(
+                                180.,
+                                linear_color_stop(black.opacity(0.), 0.),
+                                linear_color_stop(black, 1.),
+                            )),
+                    )
+                    .child(
+                        knob(12.)
+                            .left(relative(sat))
+                            .top(relative(1.0 - v))
+                            .ml(px(-6.))
+                            .mt(px(-6.))
+                            .bg(current),
+                    )
+                    .child(
+                        canvas(move |b, _, _| sv_cell.set(b), |_, _, _, _| {})
+                            .absolute()
+                            .inset_0(),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, ev: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            this.start_pick(PickDrag::Sv, ev.position, cx);
+                        }),
+                    ),
+            )
+            .child(
+                div()
+                    .id("color-hue")
+                    .relative()
+                    .h(px(12.))
+                    .w_full()
+                    .cursor(CursorStyle::PointingHand)
+                    .child(hue_strip)
+                    .child(
+                        knob(14.)
+                            .left(relative(h / 360.0))
+                            .top(px(-1.))
+                            .ml(px(-7.))
+                            .bg(hue),
+                    )
+                    .child(
+                        canvas(move |b, _, _| hue_cell.set(b), |_, _, _, _| {})
+                            .absolute()
+                            .inset_0(),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, ev: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            this.start_pick(PickDrag::Hue, ev.position, cx);
+                        }),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_px()
+                    .child(
+                        div()
+                            .flex_1()
+                            .h(px(metrics::FIELD_HEIGHT))
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .pl(px(4.))
+                            .rounded_l(px(metrics::RADIUS_SM))
+                            .bg(p.control)
+                            .child(swatch_box(&p).bg(rgba(hsv_to_rgba(h, sat, v, ce.alpha))))
+                            .child(
+                                Input::new(&self.pop_hex)
+                                    .appearance(false)
+                                    .h(px(metrics::FIELD_HEIGHT - 2.))
+                                    .px_0()
+                                    .text_size(px(metrics::TEXT_XXS)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .w(px(56.))
+                            .h(px(metrics::FIELD_HEIGHT))
+                            .flex()
+                            .items_center()
+                            .pl(px(8.))
+                            .rounded_r(px(metrics::RADIUS_SM))
+                            .bg(p.control)
+                            .child(
+                                Input::new(&self.pop_pct)
+                                    .appearance(false)
+                                    .h(px(metrics::FIELD_HEIGHT - 2.))
+                                    .px_0()
+                                    .text_size(px(metrics::TEXT_XXS)),
+                            ),
+                    ),
+            )
+    }
+
+    /// Text segmented control (gradient kind, image fit).
+    fn text_segmented(
+        &self,
+        id: &'static str,
+        items: Vec<(&'static str, bool, SegAction)>,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let p = cx.pal();
+        let mut row = div()
+            .h(px(metrics::FIELD_HEIGHT))
+            .flex()
+            .gap_px()
+            .p_px()
+            .rounded(px(metrics::RADIUS_SM))
+            .bg(p.control);
+        for (i, (label, active, action)) in items.into_iter().enumerate() {
+            row = row.child(
+                div()
+                    .id((id, i))
+                    .flex_1()
+                    .h(px(22.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(5.))
+                    .text_size(px(metrics::TEXT_XXS))
+                    .text_color(p.fg)
+                    .when(active, |d| {
+                        d.bg(p.segment_active).when(!p.dark, |d| {
+                            d.border_1()
+                                .border_color(Hsla::from(rgb(0x000000)).opacity(0.08))
+                        })
+                    })
+                    .when(!active, |d| d.opacity(0.7).hover(|s| s.opacity(1.0)))
+                    .child(label)
+                    .on_click(cx.listener(move |this, _, window, cx| match &action {
+                        SegAction::Type(t) => this.set_fill_type(*t, window, cx),
+                        SegAction::Op(op) => this.popover_op(op.clone(), cx),
+                    })),
+            );
+        }
+        row
+    }
+
+    /// Gradient preview strip: checkerboard + one 2-stop segment per pair
+    /// of neighbouring stops.
+    fn gradient_strip(g: &GradientInfo) -> Div {
+        let ix = g.sorted();
+        let col = |i: usize| -> Hsla {
+            let c = g.stops[i].color;
+            let a = ((c & 0xff) as f32 * g.opacity.clamp(0.0, 1.0)).round() as u32;
+            rgba((c & !0xff) | a).into()
+        };
+        let mut row = div().absolute().inset_0().flex();
+        let (Some(&first), Some(&last)) = (ix.first(), ix.last()) else {
+            return row;
+        };
+        let p0 = g.stops[first].position.clamp(0.0, 1.0);
+        if p0 > 0.0 {
+            row = row.child(div().flex_none().h_full().w(relative(p0)).bg(col(first)));
+        }
+        for w in ix.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            let span = (g.stops[b].position - g.stops[a].position).clamp(0.0, 1.0);
+            if span <= 0.0 {
+                continue;
+            }
+            row = row.child(
+                div()
+                    .flex_none()
+                    .h_full()
+                    .w(relative(span))
+                    .bg(linear_gradient(
+                        90.,
+                        linear_color_stop(col(a), 0.),
+                        linear_color_stop(col(b), 1.),
+                    )),
+            );
+        }
+        row.child(div().flex_1().h_full().bg(col(last)))
+    }
+
+    fn render_gradient_body(
+        &self,
+        ce: &ColorEdit,
+        paint: &Paint,
+        g: &GradientInfo,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let p = cx.pal();
+        let picked = self.picked_stop(paint);
+        let kinds = GradKind::ALL
+            .iter()
+            .map(|&k| {
+                (
+                    k.fill_type().label(),
+                    g.kind == k,
+                    SegAction::Type(k.fill_type()),
+                )
+            })
+            .collect();
+        let bar_cell = ce.bar_bounds.clone();
+        let mut bar = div().relative().pt(px(12.)).child(
             div()
-                .id("color-popover")
-                .occlude()
-                .w(px(240.))
-                .flex()
-                .flex_col()
-                .rounded(px(metrics::RADIUS_MD))
-                .bg(p.popover)
-                .border_1()
-                .border_color(p.border)
-                .shadow_lg()
-                .text_size(px(metrics::TEXT_XXS))
-                .text_color(p.fg)
-                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                    if this.color_edit.as_ref().is_some_and(|c| c.drag.is_none()) {
-                        this.color_edit = None;
-                        cx.notify();
-                    }
-                }))
+                .id("stop-bar")
+                .relative()
+                .h(px(24.))
+                .w_full()
+                .rounded(px(4.))
+                .overflow_hidden()
+                .cursor(CursorStyle::PointingHand)
+                .child(checkerboard(6.0, p.dark))
+                .child(Self::gradient_strip(g))
                 .child(
                     div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .px(px(12.))
-                        .py(px(8.))
-                        .border_b_1()
-                        .border_color(p.border)
-                        .child(div().font_weight(FontWeight::MEDIUM).child(title))
-                        .child(icon_btn("color-close", 0, IconName::X, false, &p).on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.color_edit = None;
-                                cx.notify();
-                            }),
-                        )),
+                        .absolute()
+                        .inset_0()
+                        .rounded(px(4.))
+                        .border_1()
+                        .border_color(p.fg.opacity(0.08)),
                 )
                 .child(
-                    div()
-                        .p(px(12.))
-                        .flex()
-                        .flex_col()
-                        .gap(px(10.))
-                        .child(
-                            div()
-                                .id("color-sv")
-                                .relative()
-                                .h(px(150.))
-                                .w_full()
-                                .rounded(px(4.))
-                                .bg(hue)
-                                .cursor(CursorStyle::Crosshair)
-                                .child(div().absolute().inset_0().rounded(px(4.)).bg(
-                                    linear_gradient(
-                                        90.,
-                                        linear_color_stop(white, 0.),
-                                        linear_color_stop(white.opacity(0.), 1.),
-                                    ),
-                                ))
-                                .child(div().absolute().inset_0().rounded(px(4.)).bg(
-                                    linear_gradient(
-                                        180.,
-                                        linear_color_stop(black.opacity(0.), 0.),
-                                        linear_color_stop(black, 1.),
-                                    ),
-                                ))
-                                .child(
-                                    knob(12.)
-                                        .left(relative(sat))
-                                        .top(relative(1.0 - v))
-                                        .ml(px(-6.))
-                                        .mt(px(-6.))
-                                        .bg(current),
+                    canvas(move |b, _, _| bar_cell.set(b), |_, _, _, _| {})
+                        .absolute()
+                        .inset_0(),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, ev: &MouseDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        this.on_bar_down(ev.position, window, cx);
+                    }),
+                ),
+        );
+        let removing = self.stop_drag.as_ref().filter(|d| d.off).map(|d| d.index);
+        for (i, s) in g.stops.iter().enumerate() {
+            let selected = ce.stop == Some(i);
+            let border = if selected { p.accent_active } else { p.border };
+            bar = bar.child(
+                div()
+                    .id(("stop-marker", i))
+                    .absolute()
+                    .left(relative(s.position.clamp(0.0, 1.0)))
+                    .top_0()
+                    .ml(px(-10.))
+                    .w(px(20.))
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .cursor(CursorStyle::OpenHand)
+                    .when(removing == Some(i), |d| d.opacity(0.3))
+                    .child(
+                        div()
+                            .size(px(20.))
+                            .rounded(px(4.))
+                            .border_2()
+                            .border_color(border)
+                            .bg(p.popover)
+                            .when(selected, |d| d.shadow_sm())
+                            .child(color_fill(s.color, p.dark).size_full().rounded(px(2.))),
+                    )
+                    .child(triangle_down(border))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, ev: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.on_marker_down(i, ev.position, window, cx);
+                        }),
+                    ),
+            );
+        }
+        let next = g.next_stop_position();
+        let add = icon_btn("stop-add", 0, IconName::Plus, false, &p)
+            .tooltip(|w, cx| Tooltip::new("Add color stop").build(w, cx))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                let n = this
+                    .color_edit
+                    .as_ref()
+                    .and_then(|c| this.target_paint(c.target, cx))
+                    .and_then(|p| p.gradient.map(|g| g.stops.len()));
+                this.popover_op(PaintOp::AddStop(next), cx);
+                if let Some(n) = n {
+                    this.select_stop(Some(n), window, cx);
+                }
+            }));
+        let mut rows = div().flex().flex_col();
+        let single = g.stops.len() <= 1;
+        for i in g.sorted() {
+            let s = &g.stops[i];
+            let selected = ce.stop == Some(i);
+            let pos_input = self.stop_inputs.get(&i).cloned();
+            let focused = pos_input
+                .as_ref()
+                .is_some_and(|inp| inp.read(cx).focus_handle(cx).is_focused(window));
+            rows = rows.child(
+                div()
+                    .id(("stop-row", i))
+                    .flex()
+                    .items_center()
+                    .gap(px(4.))
+                    .mx(px(-12.))
+                    .px(px(12.))
+                    .py(px(2.))
+                    .when(selected, |d| d.bg(p.accent_active.opacity(0.2)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, window, cx| {
+                            this.select_stop(Some(i), window, cx)
+                        }),
+                    )
+                    .child(
+                        div()
+                            .w(px(56.))
+                            .flex_none()
+                            .h(px(metrics::FIELD_HEIGHT))
+                            .flex()
+                            .items_center()
+                            .px(px(6.))
+                            .rounded(px(metrics::RADIUS_SM))
+                            .bg(p.control)
+                            .border_1()
+                            .border_color(if focused {
+                                p.focus
+                            } else {
+                                p.focus.opacity(0.0)
+                            })
+                            .when_some(pos_input, |d, inp| {
+                                d.child(
+                                    Input::new(&inp)
+                                        .appearance(false)
+                                        .h(px(metrics::FIELD_HEIGHT - 2.))
+                                        .px_0()
+                                        .text_size(px(metrics::TEXT_XXS)),
                                 )
-                                .child(
-                                    canvas(move |b, _, _| sv_cell.set(b), |_, _, _, _| {})
-                                        .absolute()
-                                        .inset_0(),
-                                )
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, ev: &MouseDownEvent, _, cx| {
-                                        cx.stop_propagation();
-                                        this.start_pick(PickDrag::Sv, ev.position, cx);
-                                    }),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .id("color-hue")
-                                .relative()
-                                .h(px(12.))
-                                .w_full()
-                                .cursor(CursorStyle::PointingHand)
-                                .child(hue_strip)
-                                .child(
-                                    knob(14.)
-                                        .left(relative(h / 360.0))
-                                        .top(px(-1.))
-                                        .ml(px(-7.))
-                                        .bg(hue),
-                                )
-                                .child(
-                                    canvas(move |b, _, _| hue_cell.set(b), |_, _, _, _| {})
-                                        .absolute()
-                                        .inset_0(),
-                                )
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, ev: &MouseDownEvent, _, cx| {
-                                        cx.stop_propagation();
-                                        this.start_pick(PickDrag::Hue, ev.position, cx);
-                                    }),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .gap_px()
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .h(px(metrics::FIELD_HEIGHT))
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(6.))
-                                        .pl(px(4.))
-                                        .rounded_l(px(metrics::RADIUS_SM))
-                                        .bg(p.control)
-                                        .child(
-                                            div()
-                                                .size(px(16.))
-                                                .flex_none()
-                                                .rounded(px(4.))
-                                                .border_1()
-                                                .border_color(p.fg.opacity(0.1))
-                                                .bg(rgba(hsv_to_rgba(h, sat, v, ce.alpha))),
-                                        )
-                                        .child(
-                                            Input::new(&self.pop_hex)
-                                                .appearance(false)
-                                                .h(px(metrics::FIELD_HEIGHT - 2.))
-                                                .px_0()
-                                                .text_size(px(metrics::TEXT_XXS)),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .w(px(56.))
-                                        .h(px(metrics::FIELD_HEIGHT))
-                                        .flex()
-                                        .items_center()
-                                        .pl(px(8.))
-                                        .rounded_r(px(metrics::RADIUS_SM))
-                                        .bg(p.control)
-                                        .child(
-                                            Input::new(&self.pop_pct)
-                                                .appearance(false)
-                                                .h(px(metrics::FIELD_HEIGHT - 2.))
-                                                .px_0()
-                                                .text_size(px(metrics::TEXT_XXS)),
-                                        ),
-                                ),
-                        ),
-                );
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h(px(metrics::FIELD_HEIGHT))
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .px(px(4.))
+                            .rounded(px(metrics::RADIUS_SM))
+                            .bg(p.control)
+                            .child(swatch_box(&p).child(color_fill(s.color, p.dark).size_full()))
+                            .child(match &s.var {
+                                Some(v) => var_chip(&p, v).into_any_element(),
+                                None => div()
+                                    .flex_1()
+                                    .truncate()
+                                    .child(format!("{:06X}", s.color >> 8))
+                                    .into_any_element(),
+                            })
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_color(p.fg_muted)
+                                    .child(format_percent((s.color & 0xff) as f32 / 255.0)),
+                            ),
+                    )
+                    .child(
+                        icon_btn("stop-rm", i, IconName::Minus, false, &p)
+                            .when(single, |d| d.invisible())
+                            .tooltip(|w, cx| Tooltip::new("Remove color stop").build(w, cx))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.popover_op(PaintOp::RemoveStop(i), cx);
+                                this.select_stop(None, window, cx);
+                            })),
+                    ),
+            );
+        }
+        let angle = div()
+            .h(px(metrics::FIELD_HEIGHT))
+            .w(px(88.))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .px(px(6.))
+            .rounded(px(metrics::RADIUS_SM))
+            .bg(p.control)
+            .child(
+                Icon::new(IconName::RotateCw)
+                    .size(px(12.))
+                    .text_color(p.fg_muted),
+            )
+            .child(
+                div().flex_1().min_w_0().child(
+                    Input::new(&self.pop_angle)
+                        .appearance(false)
+                        .h(px(metrics::FIELD_HEIGHT - 2.))
+                        .px_0()
+                        .text_size(px(metrics::TEXT_XXS)),
+                ),
+            );
+        let _ = picked;
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(self.text_segmented("grad-kind", kinds, cx))
+            .child(bar)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .child(
+                        div()
+                            .h(px(metrics::SECTION_HEADER))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(div().font_weight(FontWeight::MEDIUM).child("Stops"))
+                            .child(add),
+                    )
+                    .child(rows),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(div().text_color(p.fg_muted).child("Angle"))
+                    .child(angle),
+            )
+            .child(div().h_px().mx(px(-12.)).bg(p.border))
+            .child(self.render_picker(ce, cx))
+    }
+
+    fn render_image_body(&self, img: &ImageInfo, cx: &mut Context<Self>) -> Div {
+        let p = cx.pal();
+        let fits = ImageFit::ALL
+            .iter()
+            .map(|&f| (f.label(), img.fit == f, SegAction::Op(PaintOp::ImageFit(f))))
+            .collect();
+        let missing = img.url.is_empty();
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(self.text_segmented("image-fit", fits, cx))
+            .child(
+                div()
+                    .flex()
+                    .gap(px(4.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h(px(metrics::FIELD_HEIGHT))
+                            .flex()
+                            .items_center()
+                            .px(px(8.))
+                            .rounded(px(metrics::RADIUS_SM))
+                            .bg(p.control)
+                            .child(
+                                Input::new(&self.pop_url)
+                                    .appearance(false)
+                                    .h(px(metrics::FIELD_HEIGHT - 2.))
+                                    .px_0()
+                                    .text_size(px(metrics::TEXT_XXS)),
+                            ),
+                    )
+                    .child(
+                        icon_btn("image-import", 0, IconName::FolderOpen, missing, &p)
+                            .tooltip(|w, cx| Tooltip::new("Import image file").build(w, cx))
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.import_image(window, cx)),
+                            ),
+                    ),
+            )
+    }
+
+    fn render_color_popover(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let ce = self.color_edit.as_ref()?;
+        let p = cx.pal();
+        let paint = self.target_paint(ce.target, cx);
+        let ftype = paint.as_ref().and_then(|p| p.fill_type());
+        let close = icon_btn("color-close", 0, IconName::X, false, &p).on_click(cx.listener(
+            |this, _, _, cx| {
+                this.color_edit = None;
+                this.push_fill_edit(cx);
+                cx.notify();
+            },
+        ));
+        let header = div()
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .px(px(12.))
+            .py(px(8.))
+            .border_b_1()
+            .border_color(p.border);
+        let header = match ce.target {
+            ColorTarget::Effect(_) => header
+                .justify_between()
+                .child(div().font_weight(FontWeight::MEDIUM).child("Shadow color"))
+                .child(close),
+            _ => {
+                let mut tabs = div().flex_1().flex().gap(px(2.));
+                for (i, (icon, tip, t)) in [
+                    (IconName::Droplet, "Color", FillType::Solid),
+                    (IconName::Rainbow, "Gradient", FillType::Linear),
+                    (IconName::Image, "Image", FillType::Image),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let active = match t {
+                        FillType::Linear => ftype.is_some_and(|f| f.gradient().is_some()),
+                        _ => ftype == Some(t),
+                    };
+                    tabs = tabs.child(
+                        icon_btn("fill-tab", i, icon, active, &p)
+                            .tooltip(move |w, cx| Tooltip::new(tip).build(w, cx))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                let keep = this
+                                    .color_edit
+                                    .as_ref()
+                                    .and_then(|c| this.target_paint(c.target, cx))
+                                    .and_then(|p| p.fill_type())
+                                    .is_some_and(|f| f.gradient().is_some());
+                                if !(t == FillType::Linear && keep) {
+                                    this.set_fill_type(t, window, cx);
+                                }
+                            })),
+                    );
+                }
+                header.child(tabs).child(close)
+            }
+        };
+        let body = div().p(px(12.)).flex().flex_col().gap(px(10.));
+        let body = match (&paint, ftype) {
+            (Some(pt), Some(t)) if t.gradient().is_some() => match &pt.gradient {
+                Some(g) => body.child(self.render_gradient_body(ce, pt, g, window, cx)),
+                None => body,
+            },
+            (Some(pt), Some(FillType::Image)) => match &pt.image {
+                Some(img) => body.child(self.render_image_body(img, cx)),
+                None => body,
+            },
+            (Some(pt), None) => body.child(
+                div()
+                    .text_color(p.fg_muted)
+                    .child(format!("{} fills can't be edited here yet.", pt.label())),
+            ),
+            (Some(pt), Some(FillType::Solid)) => body
+                .when_some(pt.var.clone(), |d, v| {
+                    d.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .text_color(p.fg_muted)
+                            .child("Variable")
+                            .child(var_chip(&p, &v)),
+                    )
+                })
+                .child(self.render_picker(ce, cx)),
+            _ => body.child(self.render_picker(ce, cx)),
+        };
+        let popover = div()
+            .id("color-popover")
+            .track_focus(&self.pop_focus)
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                if !matches!(ev.keystroke.key.as_str(), "delete" | "backspace") {
+                    return;
+                }
+                let stops = this
+                    .color_edit
+                    .as_ref()
+                    .and_then(|c| this.target_paint(c.target, cx))
+                    .and_then(|p| p.gradient)
+                    .map_or(0, |g| g.stops.len());
+                if let Some(i) = this.color_edit.as_ref().and_then(|c| c.stop)
+                    && stops > 1
+                {
+                    cx.stop_propagation();
+                    this.popover_op(PaintOp::RemoveStop(i), cx);
+                    this.select_stop(None, window, cx);
+                }
+            }))
+            .occlude()
+            .w(px(240.))
+            .flex()
+            .flex_col()
+            .rounded(px(metrics::RADIUS_MD))
+            .bg(p.popover)
+            .border_1()
+            .border_color(p.border)
+            .shadow_lg()
+            .text_size(px(metrics::TEXT_XXS))
+            .text_color(p.fg)
+            .on_mouse_down_out(cx.listener(|this, _, window, cx| {
+                if this.color_edit.as_ref().is_some_and(|c| c.drag.is_none())
+                    && this.stop_drag.is_none()
+                {
+                    // After the canvas saw the click: grabbing a gradient
+                    // handle there keeps the popover open (Pen).
+                    cx.defer_in(window, |this, _, cx| {
+                        if this.state.read(cx).fill_handle_drag {
+                            return;
+                        }
+                        this.color_edit = None;
+                        this.push_fill_edit(cx);
+                        cx.notify();
+                    });
+                }
+            }))
+            .child(header)
+            .child(body);
         Some(
             deferred(
                 anchored()
                     .position(ce.at)
                     .snap_to_window_with_margin(px(8.))
-                    .child(body),
+                    .child(popover),
             )
             .with_priority(2)
             .into_any_element(),
@@ -1669,28 +2604,57 @@ impl InspectorPanel {
         let count = list.len();
         let drag = self.paint_drag.as_ref().filter(|d| d.stroke == stroke);
         let mut sec = section(&p, title, add);
+        // Several nodes with different paints: Pen shows "Mixed fills".
+        let mixed = {
+            let all = self.selected_props(cx);
+            all.len() > 1
+                && all
+                    .iter()
+                    .any(|q| (if stroke { &q.strokes } else { &q.fills }) != list)
+        };
+        if mixed {
+            return sec.child(
+                div()
+                    .h(px(metrics::FIELD_HEIGHT))
+                    .flex()
+                    .items_center()
+                    .text_size(px(metrics::TEXT_XXS))
+                    .text_color(p.fg_muted)
+                    .child(if stroke {
+                        "Mixed strokes"
+                    } else {
+                        "Mixed fills"
+                    }),
+            );
+        }
         for (i, paint) in list.iter().enumerate() {
             let target = if stroke {
                 ColorTarget::Stroke(i)
             } else {
                 ColorTarget::Fill(i)
             };
-            let solid = matches!(paint.kind, PaintKind::Solid(_));
-            let swatch = match paint.kind {
-                PaintKind::Solid(c) => div().bg(rgba(c)),
-                PaintKind::LinearGradient | PaintKind::RadialGradient => div().bg(linear_gradient(
-                    90.,
-                    linear_color_stop(p.fg, 0.),
-                    linear_color_stop(p.island, 1.),
-                )),
-                PaintKind::Image => div().bg(p.fg_muted).child(
+            // Hex field only for literal solid colors (a bound one shows its
+            // variable).
+            let solid = matches!(paint.kind, PaintKind::Solid(_)) && paint.var.is_none();
+            let swatch = match (&paint.kind, &paint.gradient) {
+                (PaintKind::Solid(c), _) => color_fill(*c, p.dark),
+                (_, Some(g)) => {
+                    let (a, b) = g.ends();
+                    div().bg(linear_gradient(
+                        90.,
+                        linear_color_stop(rgba(a), 0.),
+                        linear_color_stop(rgba(b), 1.),
+                    ))
+                }
+                (PaintKind::Image, _) => div().bg(p.fg.opacity(0.12)).child(
                     Icon::new(IconName::Image)
                         .size(px(10.))
-                        .text_color(p.island),
+                        .text_color(p.fg_muted),
                 ),
+                _ => div().bg(p.fg.opacity(0.12)),
             };
             let ix = if stroke { 1000 } else { 0 } + i;
-            let inputs = self.paint_inputs.get(&(stroke, i)).filter(|_| solid);
+            let inputs = self.paint_inputs.get(&(stroke, i));
             let group: SharedString = format!("paint-row-{ix}").into();
             let dragging = drag.is_some_and(|d| d.from == i);
             let drop_line = drag
@@ -1778,24 +2742,24 @@ impl InspectorPanel {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .when(solid, |d| {
-                                        d.cursor(CursorStyle::PointingHand).on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(
-                                                move |this, ev: &MouseDownEvent, window, cx| {
-                                                    cx.stop_propagation();
-                                                    this.open_color(
-                                                        target,
-                                                        ev.position.y,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                },
-                                            ),
-                                        )
-                                    }),
+                                    .cursor(CursorStyle::PointingHand)
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(
+                                            move |this, ev: &MouseDownEvent, window, cx| {
+                                                cx.stop_propagation();
+                                                this.open_color(target, ev.position.y, window, cx);
+                                            },
+                                        ),
+                                    ),
                             )
-                            .child(match inputs {
+                            .child(match inputs.filter(|_| solid) {
+                                _ if paint.var.is_some() => div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .child(var_chip(&p, paint.var.as_deref().unwrap_or_default()))
+                                    .into_any_element(),
                                 Some((hex, _)) => div()
                                     .flex_1()
                                     .min_w_0()
@@ -2574,16 +3538,110 @@ fn select_button(id: &'static str, label: &str, p: &Palette) -> Button {
         )
 }
 
+/// 16 px color swatch frame (radius 4, hairline border).
+fn swatch_box(p: &Palette) -> Div {
+    div()
+        .overflow_hidden()
+        .size(px(16.))
+        .flex_none()
+        .rounded(px(4.))
+        .border_1()
+        .border_color(p.fg.opacity(0.1))
+}
+
+/// Fill of a swatch: the color over a checkerboard when it is translucent.
+fn color_fill(c: u32, dark: bool) -> Div {
+    let d = div().relative().overflow_hidden();
+    if c & 0xff == 0xff {
+        return d.bg(rgba(c));
+    }
+    d.child(checkerboard(4.0, dark))
+        .child(div().absolute().inset_0().bg(rgba(c)))
+}
+
+/// Name of the color variable a paint is bound to.
+fn var_chip(p: &Palette, name: &str) -> Div {
+    div()
+        .min_w_0()
+        .h(px(18.))
+        .px(px(5.))
+        .flex()
+        .items_center()
+        .rounded(px(4.))
+        .bg(p.fg.opacity(if p.dark { 0.12 } else { 0.07 }))
+        .text_color(p.fg)
+        .child(div().truncate().child(SharedString::from(name.to_string())))
+}
+
+/// Transparency checkerboard filling its parent.
+fn checkerboard(cell: f32, dark: bool) -> impl IntoElement {
+    let (a, b): (Hsla, Hsla) = if dark {
+        (rgb(0x3f3f46).into(), rgb(0x52525b).into())
+    } else {
+        (rgb(0xffffff).into(), rgb(0xe4e4e7).into())
+    };
+    canvas(
+        |_, _, _| (),
+        move |bounds, _, window, _| {
+            window.paint_quad(fill(bounds, a));
+            let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+            let (cols, rows) = ((w / cell).ceil() as i32, (h / cell).ceil() as i32);
+            for r in 0..rows {
+                for c in 0..cols {
+                    if (r + c) % 2 == 1 {
+                        let o = point(
+                            bounds.origin.x + px(c as f32 * cell),
+                            bounds.origin.y + px(r as f32 * cell),
+                        );
+                        window.paint_quad(fill(Bounds::new(o, size(px(cell), px(cell))), b));
+                    }
+                }
+            }
+        },
+    )
+    .absolute()
+    .inset_0()
+}
+
+/// Small downward triangle under a stop marker.
+fn triangle_down(color: Hsla) -> impl IntoElement {
+    canvas(
+        |_, _, _| (),
+        move |b, _, window, _| {
+            let mut pb = PathBuilder::fill();
+            pb.move_to(b.origin);
+            pb.line_to(point(b.origin.x + b.size.width, b.origin.y));
+            pb.line_to(point(
+                b.origin.x + b.size.width / 2.,
+                b.origin.y + b.size.height,
+            ));
+            pb.close();
+            if let Ok(path) = pb.build() {
+                window.paint_path(path, color);
+            }
+        },
+    )
+    .w(px(8.))
+    .h(px(4.))
+}
+
 impl Render for InspectorPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = cx.pal();
         self.ensure_paint_inputs(window, cx);
         // Drop editors whose target disappeared (selection change, removal).
-        if let Some(t) = self.color_edit.as_ref().map(|c| c.target)
-            && self.target_color(t, cx).is_none()
-        {
-            self.color_edit = None;
+        if let Some(t) = self.color_edit.as_ref().map(|c| c.target) {
+            let gone = match t {
+                ColorTarget::Effect(_) => self.target_color(t, cx).is_none(),
+                _ => self.target_paint(t, cx).is_none(),
+            };
+            if gone {
+                self.color_edit = None;
+                self.stop_drag = None;
+            }
         }
+        self.ensure_stop_inputs(window, cx);
+        self.push_fill_edit(cx);
         if let Some(i) = self.fx_open
             && self
                 .selected_props(cx)
@@ -2652,6 +3710,18 @@ impl Render for InspectorPanel {
                     Self::end_paint_drag,
                 ))
             })
+            .when(self.stop_drag.is_some(), |d| {
+                d.child(drag::capture(
+                    entity.clone(),
+                    if self.stop_drag.as_ref().is_some_and(|s| s.off) {
+                        CursorStyle::Arrow
+                    } else {
+                        CursorStyle::ClosedHand
+                    },
+                    Self::on_stop_drag_move,
+                    Self::end_stop_drag,
+                ))
+            })
             .when(
                 self.color_edit.as_ref().is_some_and(|c| c.drag.is_some()),
                 |d| {
@@ -2663,7 +3733,7 @@ impl Render for InspectorPanel {
                     ))
                 },
             )
-            .when_some(self.render_color_popover(cx), |d, e| d.child(e))
+            .when_some(self.render_color_popover(window, cx), |d, e| d.child(e))
     }
 }
 
